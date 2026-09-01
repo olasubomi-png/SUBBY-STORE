@@ -22,25 +22,5 @@ export function getDb() {
   return _db;
 }
 
-/** In-memory fallback for tests without Postgres */
-export type MemoryStore = {
-  users: schema.User[];
-  stores: schema.Store[];
-  products: schema.Product[];
-  orders: schema.Order[];
-  orderItems: schema.OrderItem[];
-  payments: (typeof schema.payments.$inferSelect)[];
-  seq: { user: number; store: number; product: number; order: number; item: number; payment: number };
-};
-
-export function createMemoryStore(): MemoryStore {
-  return {
-    users: [],
-    stores: [],
-    products: [],
-    orders: [],
-    orderItems: [],
-    payments: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1 },
-  };
-}
+export type { MemoryStore } from "./memory";
+export { createMemoryStore } from "./memory";

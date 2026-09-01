@@ -2,8 +2,8 @@
  * In-memory repository used by unit tests and local demo without Postgres.
  * Production paths use Drizzle via db/client.ts.
  */
-import type { MemoryStore } from "@/db/client";
-import { createMemoryStore } from "@/db/client";
+import type { MemoryStore } from "@/db/memory";
+import { createMemoryStore } from "@/db/memory";
 import type { CartItemInput, PricedCart } from "@/lib/server/cart";
 import { priceCart } from "@/lib/server/cart";
 import { hashPassword, verifyPassword } from "@/lib/server/password";
@@ -11,6 +11,9 @@ import { slugify, isValidSlug } from "@/lib/slug";
 import { assertPositiveKobo } from "@/lib/money";
 
 let store: MemoryStore = createMemoryStore();
+
+/** Serializes concurrent confirm attempts per payment reference (test/sim). */
+const confirmLocks = new Map<string, Promise<unknown>>();
 
 export function resetMemoryStore(): void {
   store = createMemoryStore();
@@ -217,24 +220,35 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
     return { order, alreadyPaid: true as const };
   }
 
+  if (order.paymentStatus === "failed") {
+    throw new Error("Cannot confirm a failed payment");
+  }
+
   if (amountKobo !== order.totalKobo) {
     throw new Error("Payment amount mismatch");
   }
+
+  // Claim pending → paid before stock moves (lost races become alreadyPaid)
+  if (order.paymentStatus !== "pending") {
+    return { order, alreadyPaid: true as const };
+  }
+  order.paymentStatus = "paid";
+  order.orderStatus = "confirmed";
+  order.updatedAt = new Date();
 
   const items = store.orderItems.filter((i) => i.orderId === order.id);
   for (const item of items) {
     const product = store.products.find((p) => p.id === item.productId);
     if (!product) continue;
     if (product.stock < item.quantity) {
+      // roll back claim
+      order.paymentStatus = "pending";
+      order.orderStatus = "pending";
       throw new Error("Insufficient stock at payment confirmation");
     }
     product.stock -= item.quantity;
     product.updatedAt = new Date();
   }
-
-  order.paymentStatus = "paid";
-  order.orderStatus = "confirmed";
-  order.updatedAt = new Date();
 
   const payment = store.payments.find((p) => p.reference === reference);
   if (payment) {
@@ -291,23 +305,45 @@ export function memMarkOrderPaymentFailed(reference: string, reason?: string) {
   return order;
 }
 
-/** Idempotent webhook processing using rawEventId. */
-export function memConfirmPaidOrderWithEvent(
+/**
+ * Idempotent webhook processing using rawEventId + per-reference serialization.
+ * Concurrent callers for the same reference run one-at-a-time so stock moves once.
+ */
+export async function memConfirmPaidOrderWithEvent(
   reference: string,
   amountKobo: number,
   rawEventId?: string | null
-) {
-  if (rawEventId) {
-    const existing = store.payments.find((p) => p.rawEventId === rawEventId);
-    if (existing) {
-      const order = store.orders.find((o) => o.id === existing.orderId)!;
-      return { order, alreadyPaid: true as const };
+): Promise<{ order: (typeof store.orders)[0]; alreadyPaid: boolean }> {
+  const run = async () => {
+    if (rawEventId) {
+      const existing = store.payments.find((p) => p.rawEventId === rawEventId);
+      if (existing) {
+        const order = store.orders.find((o) => o.id === existing.orderId)!;
+        return { order, alreadyPaid: true as const };
+      }
+    }
+    const result = memConfirmPaidOrder(reference, amountKobo);
+    if (rawEventId) {
+      const payment = store.payments.find((p) => p.reference === reference);
+      if (payment) payment.rawEventId = rawEventId;
+    }
+    return result;
+  };
+
+  const prev = confirmLocks.get(reference) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const chain = prev.then(() => gate);
+  confirmLocks.set(reference, chain);
+  await prev;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (confirmLocks.get(reference) === chain) {
+      confirmLocks.delete(reference);
     }
   }
-  const result = memConfirmPaidOrder(reference, amountKobo);
-  if (rawEventId) {
-    const payment = store.payments.find((p) => p.reference === reference);
-    if (payment) payment.rawEventId = rawEventId;
-  }
-  return result;
 }

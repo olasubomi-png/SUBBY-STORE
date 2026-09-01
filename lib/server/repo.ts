@@ -359,23 +359,50 @@ export async function confirmPaidOrder(
   rawEventId?: string | null
 ) {
   if (useMemory()) {
-    return mem.memConfirmPaidOrderWithEvent
-      ? mem.memConfirmPaidOrderWithEvent(reference, amountKobo, rawEventId)
-      : mem.memConfirmPaidOrder(reference, amountKobo);
+    return mem.memConfirmPaidOrderWithEvent(
+      reference,
+      amountKobo,
+      rawEventId
+    );
   }
 
   const db = getDb();
   return db.transaction(async (tx) => {
+    // Idempotent on provider event id when present
+    if (rawEventId) {
+      const byEvent = await tx
+        .select()
+        .from(payments)
+        .where(eq(payments.rawEventId, rawEventId))
+        .limit(1);
+      if (byEvent[0]) {
+        const paidOrder = await tx
+          .select()
+          .from(orders)
+          .where(eq(orders.id, byEvent[0].orderId))
+          .limit(1);
+        if (paidOrder[0]) {
+          return { order: paidOrder[0], alreadyPaid: true as const };
+        }
+      }
+    }
+
+    // Row lock: concurrent confirmations for the same reference serialize here
     const orderRows = await tx
       .select()
       .from(orders)
       .where(eq(orders.paymentReference, reference))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const order = orderRows[0];
     if (!order) throw new Error("Order not found");
 
     if (order.paymentStatus === "paid") {
       return { order, alreadyPaid: true as const };
+    }
+
+    if (order.paymentStatus === "failed") {
+      throw new Error("Cannot confirm a failed payment");
     }
 
     if (amountKobo !== order.totalKobo) {
@@ -386,6 +413,29 @@ export async function confirmPaidOrder(
       .select()
       .from(orderItems)
       .where(eq(orderItems.orderId, order.id));
+
+    // Conditional claim: only the first tx that still sees pending proceeds
+    const claimed = await tx
+      .update(orders)
+      .set({
+        paymentStatus: "paid",
+        orderStatus: "confirmed",
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(orders.id, order.id), eq(orders.paymentStatus, "pending"))
+      )
+      .returning();
+
+    if (!claimed[0]) {
+      // Lost the race — another confirmation already marked paid
+      const refreshed = await tx
+        .select()
+        .from(orders)
+        .where(eq(orders.id, order.id))
+        .limit(1);
+      return { order: refreshed[0] ?? order, alreadyPaid: true as const };
+    }
 
     for (const item of items) {
       if (!item.productId) continue;
@@ -407,22 +457,16 @@ export async function confirmPaidOrder(
       }
     }
 
-    const paidOrders = await tx
-      .update(orders)
-      .set({
-        paymentStatus: "paid",
-        orderStatus: "confirmed",
-        updatedAt: new Date(),
-      })
-      .where(eq(orders.id, order.id))
-      .returning();
-
     await tx
       .update(payments)
-      .set({ status: "paid", updatedAt: new Date() })
+      .set({
+        status: "paid",
+        updatedAt: new Date(),
+        ...(rawEventId ? { rawEventId } : {}),
+      })
       .where(eq(payments.reference, reference));
 
-    return { order: paidOrders[0], alreadyPaid: false as const };
+    return { order: claimed[0], alreadyPaid: false as const };
   });
 }
 

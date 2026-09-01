@@ -217,9 +217,9 @@ describe("payments idempotency", () => {
 
   it("is idempotent on duplicate webhook event ids", async () => {
     const { ref, productId } = await seedOrder();
-    const a = memConfirmPaidOrderWithEvent(ref, 30000, "evt_1");
+    const a = await memConfirmPaidOrderWithEvent(ref, 30000, "evt_1");
     expect(a.alreadyPaid).toBe(false);
-    const b = memConfirmPaidOrderWithEvent(ref, 30000, "evt_1");
+    const b = await memConfirmPaidOrderWithEvent(ref, 30000, "evt_1");
     expect(b.alreadyPaid).toBe(true);
     expect(getMemoryStore().products.find((p) => p.id === productId)!.stock).toBe(
       4
