@@ -28,7 +28,7 @@ const secret = "test_session_secret_at_least_32_chars_xx";
 
 beforeEach(() => {
   resetMemoryStore();
-  process.env.NODE_ENV = "test";
+  (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
   process.env.USE_MEMORY_DB = "1";
   process.env.SESSION_SECRET = secret;
   process.env.PAYSTACK_SECRET_KEY = "sk_test_REPLACE";
@@ -37,26 +37,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env.NODE_ENV = "test";
+  (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
   process.env.USE_MEMORY_DB = "1";
 });
 
 describe("production config guards", () => {
   it("allows memory only outside production with explicit flags", () => {
-    process.env.NODE_ENV = "test";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
     process.env.USE_MEMORY_DB = "1";
     expect(allowMemoryDb()).toBe(true);
   });
 
   it("fails production without DATABASE_URL", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "production";
     delete process.env.DATABASE_URL;
     expect(() => requireDatabaseUrl()).toThrow(/DATABASE_URL/);
     expect(() => assertProductionConfig()).toThrow(/DATABASE_URL/);
   });
 
   it("forbids PAYSTACK_MODE=mock in production", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
     process.env.SESSION_SECRET = secret;
     process.env.PAYSTACK_MODE = "mock";
@@ -66,7 +66,7 @@ describe("production config guards", () => {
   });
 
   it("forbids REPLACE placeholder Paystack key in production", () => {
-    process.env.NODE_ENV = "production";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "production";
     process.env.DATABASE_URL = "postgresql://u:p@localhost:5432/db";
     process.env.SESSION_SECRET = secret;
     process.env.PAYSTACK_SECRET_KEY = "sk_test_REPLACE";
