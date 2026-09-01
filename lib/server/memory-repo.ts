@@ -217,8 +217,7 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
     return { order, alreadyPaid: true as const };
   }
 
-  if (amountKobo !== order.totalKobo && amountKobo !== 0) {
-    // amountKobo 0 allowed only in mock verify path when caller skips amount check carefully
+  if (amountKobo !== order.totalKobo) {
     throw new Error("Payment amount mismatch");
   }
 
@@ -273,4 +272,42 @@ export function memDashboardStats(ownerId: number) {
     customerCount: customers,
     recentOrders: orders.slice(0, 10),
   };
+}
+
+
+export function memMarkOrderPaymentFailed(reference: string, reason?: string) {
+  const order = store.orders.find((o) => o.paymentReference === reference);
+  if (!order) throw new Error("Order not found");
+  if (order.paymentStatus === "paid") {
+    throw new Error("Cannot fail a paid order");
+  }
+  order.paymentStatus = "failed";
+  order.updatedAt = new Date();
+  const payment = store.payments.find((p) => p.reference === reference);
+  if (payment && payment.status !== "paid") {
+    payment.status = "failed";
+    payment.updatedAt = new Date();
+  }
+  return order;
+}
+
+/** Idempotent webhook processing using rawEventId. */
+export function memConfirmPaidOrderWithEvent(
+  reference: string,
+  amountKobo: number,
+  rawEventId?: string | null
+) {
+  if (rawEventId) {
+    const existing = store.payments.find((p) => p.rawEventId === rawEventId);
+    if (existing) {
+      const order = store.orders.find((o) => o.id === existing.orderId)!;
+      return { order, alreadyPaid: true as const };
+    }
+  }
+  const result = memConfirmPaidOrder(reference, amountKobo);
+  if (rawEventId) {
+    const payment = store.payments.find((p) => p.reference === reference);
+    if (payment) payment.rawEventId = rawEventId;
+  }
+  return result;
 }

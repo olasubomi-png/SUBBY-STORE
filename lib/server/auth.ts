@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { z } from "zod";
 export { hashPassword, verifyPassword } from "@/lib/server/password";
+import { requireSessionSecret } from "@/lib/server/config";
 
 export const SESSION_COOKIE = "subby_store_session";
 const SESSION_TTL_SEC = 60 * 60 * 24 * 14;
@@ -18,11 +19,7 @@ export const loginSchema = z.object({
 });
 
 function sessionSecret(): Uint8Array {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("SESSION_SECRET must be set (min 32 characters)");
-  }
-  return new TextEncoder().encode(secret);
+  return new TextEncoder().encode(requireSessionSecret());
 }
 
 export type SessionPayload = {

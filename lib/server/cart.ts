@@ -28,6 +28,21 @@ export type PricedCart = {
   currency: "NGN";
 };
 
+/** Merge duplicate product lines (malicious or accidental) into one quantity. */
+export function mergeCartItems(items: CartItemInput[]): CartItemInput[] {
+  const map = new Map<number, number>();
+  for (const item of items) {
+    const prev = map.get(item.productId) ?? 0;
+    const next = prev + item.quantity;
+    if (next > 100) throw new Error("Quantity exceeds limit");
+    map.set(item.productId, next);
+  }
+  return Array.from(map.entries()).map(([productId, quantity]) => ({
+    productId,
+    quantity,
+  }));
+}
+
 /** Server-authoritative cart pricing from product rows. */
 export function priceCart(
   items: CartItemInput[],
@@ -39,10 +54,11 @@ export function priceCart(
     active: boolean;
   }>
 ): PricedCart {
+  const merged = mergeCartItems(items);
   const byId = new Map(products.map((p) => [p.id, p]));
   const lines: PricedCartLine[] = [];
 
-  for (const item of items) {
+  for (const item of merged) {
     const product = byId.get(item.productId);
     if (!product) throw new Error("Invalid product");
     if (!product.active) throw new Error("Product is not available");

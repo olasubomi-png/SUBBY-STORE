@@ -18,13 +18,18 @@ import { slugify, isValidSlug } from "@/lib/slug";
 import { assertPositiveKobo } from "@/lib/money";
 import type { CartItemInput } from "@/lib/server/cart";
 import { priceCart } from "@/lib/server/cart";
+import { allowMemoryDb, isProduction, requireDatabaseUrl } from "@/lib/server/config";
 
 export function useMemory(): boolean {
-  return (
-    process.env.USE_MEMORY_DB === "1" ||
-    !process.env.DATABASE_URL ||
-    process.env.DATABASE_URL.includes("localhost/test")
-  );
+  if (isProduction()) {
+    // Force Postgres — never silent memory fallback in production.
+    requireDatabaseUrl();
+    return false;
+  }
+  if (allowMemoryDb()) return true;
+  // Local/dev without explicit memory flag still allows missing DATABASE_URL for DX,
+  // but only when not production.
+  return !process.env.DATABASE_URL;
 }
 
 export async function signupUser(input: {
@@ -350,9 +355,14 @@ export async function createPendingOrder(input: {
 
 export async function confirmPaidOrder(
   reference: string,
-  amountKobo: number
+  amountKobo: number,
+  rawEventId?: string | null
 ) {
-  if (useMemory()) return mem.memConfirmPaidOrder(reference, amountKobo);
+  if (useMemory()) {
+    return mem.memConfirmPaidOrderWithEvent
+      ? mem.memConfirmPaidOrderWithEvent(reference, amountKobo, rawEventId)
+      : mem.memConfirmPaidOrder(reference, amountKobo);
+  }
 
   const db = getDb();
   return db.transaction(async (tx) => {
@@ -506,4 +516,29 @@ export async function dashboardStats(ownerId: number) {
     customerCount: customers,
     recentOrders: orderList.slice(0, 10),
   };
+}
+
+
+export async function markOrderPaymentFailed(reference: string) {
+  if (useMemory()) return mem.memMarkOrderPaymentFailed(reference);
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.paymentReference, reference))
+    .limit(1);
+  const order = rows[0];
+  if (!order) throw new Error("Order not found");
+  if (order.paymentStatus === "paid") {
+    throw new Error("Cannot fail a paid order");
+  }
+  await db
+    .update(orders)
+    .set({ paymentStatus: "failed", updatedAt: new Date() })
+    .where(eq(orders.id, order.id));
+  await db
+    .update(payments)
+    .set({ status: "failed", updatedAt: new Date() })
+    .where(eq(payments.reference, reference));
+  return { ...order, paymentStatus: "failed" as const };
 }

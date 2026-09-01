@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { cartSchema } from "@/lib/server/cart";
-import { createPendingOrder, getStoreBySlug } from "@/lib/server/repo";
+import {
+  createPendingOrder,
+  getStoreBySlug,
+  markOrderPaymentFailed,
+} from "@/lib/server/repo";
 import {
   initializePaystackTransaction,
   appUrl,
 } from "@/lib/server/paystack";
 import { randomUUID } from "crypto";
+import { assertProductionConfig } from "@/lib/server/config";
 
 const checkoutSchema = z.object({
   storeSlug: z.string().min(2).max(80),
@@ -20,6 +25,7 @@ const checkoutSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    assertProductionConfig();
     const body = await req.json();
     const parsed = checkoutSchema.safeParse(body);
     if (!parsed.success) {
@@ -47,22 +53,36 @@ export async function POST(req: Request) {
       paymentReference: reference,
     });
 
-    const callbackUrl = `${appUrl()}/store/${store.slug}/order/${order.id}?ref=${encodeURIComponent(reference)}`;
+    const callbackUrl = `${appUrl()}/store/${store.slug}/order-complete?orderId=${order.id}&ref=${encodeURIComponent(reference)}`;
 
-    const paystack = await initializePaystackTransaction({
-      email: parsed.data.customerEmail,
-      amountKobo: cart.totalKobo,
-      reference,
-      callbackUrl,
-      metadata: { orderId: order.id, storeId: store.id },
-    });
+    try {
+      const paystack = await initializePaystackTransaction({
+        email: parsed.data.customerEmail,
+        amountKobo: cart.totalKobo,
+        reference,
+        callbackUrl,
+        metadata: { orderId: order.id, storeId: store.id },
+      });
 
-    return NextResponse.json({
-      orderId: order.id,
-      reference,
-      totalKobo: cart.totalKobo,
-      authorizationUrl: paystack.authorizationUrl,
-    });
+      return NextResponse.json({
+        orderId: order.id,
+        reference,
+        totalKobo: cart.totalKobo,
+        authorizationUrl: paystack.authorizationUrl,
+      });
+    } catch (initError) {
+      // Avoid leaving ambiguous pending payment after provider failure
+      try {
+        await markOrderPaymentFailed(reference);
+      } catch {
+        /* best-effort */
+      }
+      const msg =
+        initError instanceof Error
+          ? initError.message
+          : "Unable to initialize payment";
+      return NextResponse.json({ error: msg, orderId: order.id }, { status: 502 });
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Checkout failed";
     return NextResponse.json({ error: msg }, { status: 400 });

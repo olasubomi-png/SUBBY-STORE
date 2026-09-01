@@ -4,8 +4,16 @@ import {
   isPaystackMock,
 } from "@/lib/server/paystack";
 import { confirmPaidOrder, getOrderByReference } from "@/lib/server/repo";
+import { assertProductionConfig } from "@/lib/server/config";
 
 export async function GET(req: Request) {
+  try {
+    assertProductionConfig();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "config_error";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+
   const url = new URL(req.url);
   const reference = url.searchParams.get("reference");
   if (!reference) {
@@ -18,8 +26,16 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    const verified = await verifyPaystackTransaction(reference);
+    if (order.paymentStatus === "paid") {
+      return NextResponse.json({
+        ok: true,
+        alreadyPaid: true,
+        orderId: order.id,
+        paymentStatus: "paid",
+      });
+    }
 
+    // Mock callback: confirm with order total (never trust client amount)
     if (isPaystackMock() && url.searchParams.get("mock") === "1") {
       const result = await confirmPaidOrder(reference, order.totalKobo);
       return NextResponse.redirect(
@@ -29,6 +45,8 @@ export async function GET(req: Request) {
         )
       );
     }
+
+    const verified = await verifyPaystackTransaction(reference);
 
     if (verified.status !== "success") {
       return NextResponse.json(

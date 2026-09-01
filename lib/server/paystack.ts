@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { isPaystackMockMode, requirePaystackSecret } from "@/lib/server/config";
 
 export type PaystackInitResult = {
   authorizationUrl: string;
@@ -14,24 +15,18 @@ export type PaystackVerifyResult = {
   paidAt: string | null;
 };
 
+
 function secretKey(): string {
-  const key = process.env.PAYSTACK_SECRET_KEY;
-  if (!key) throw new Error("PAYSTACK_SECRET_KEY is not configured");
-  return key;
+  return requirePaystackSecret();
 }
 
 export function appUrl(): string {
   return process.env.APP_URL || "http://localhost:3000";
 }
 
-/** Mock mode when secret starts with sk_test_REPLACE or MOCK */
+/** Mock mode — never true in production (throws if misconfigured). */
 export function isPaystackMock(): boolean {
-  const key = process.env.PAYSTACK_SECRET_KEY || "";
-  return (
-    key.includes("REPLACE") ||
-    key === "sk_test_mock" ||
-    process.env.PAYSTACK_MODE === "mock"
-  );
+  return isPaystackMockMode();
 }
 
 export async function initializePaystackTransaction(input: {

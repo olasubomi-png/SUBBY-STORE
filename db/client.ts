@@ -8,6 +8,11 @@ let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 export function getDb() {
   const url = process.env.DATABASE_URL;
   if (!url) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "DATABASE_URL is required in production (in-memory DB is not allowed)"
+      );
+    }
     throw new Error("DATABASE_URL is not configured");
   }
   if (!_db) {
