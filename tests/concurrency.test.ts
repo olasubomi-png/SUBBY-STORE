@@ -105,6 +105,52 @@ describe("payment confirmation concurrency", () => {
     );
   });
 
+  it("webhook + verify racing simultaneously deducts stock once", async () => {
+    const { ref, productId, totalKobo } = await seedPaidPath(10);
+    const [webhook, verify] = await Promise.all([
+      memConfirmPaidOrderWithEvent(ref, totalKobo, "evt_webhook"),
+      memConfirmPaidOrderWithEvent(ref, totalKobo, null), // verify path has no event id
+    ]);
+    const paidOnce = [webhook, verify].filter((r) => !r.alreadyPaid);
+    const already = [webhook, verify].filter((r) => r.alreadyPaid);
+    expect(paidOnce).toHaveLength(1);
+    expect(already).toHaveLength(1);
+    expect(getMemoryStore().products.find((p) => p.id === productId)!.stock).toBe(
+      9
+    );
+  });
+
+  it("incorrect amount is rejected", async () => {
+    const { ref, productId, totalKobo } = await seedPaidPath();
+    expect(() => memConfirmPaidOrder(ref, totalKobo - 1)).toThrow(/mismatch/);
+    expect(getMemoryStore().products.find((p) => p.id === productId)!.stock).toBe(
+      5
+    );
+  });
+
+  it("already-paid order stays paid on reconfirm", async () => {
+    const { ref, productId, totalKobo } = await seedPaidPath();
+    memConfirmPaidOrder(ref, totalKobo);
+    const again = memConfirmPaidOrder(ref, totalKobo);
+    expect(again.alreadyPaid).toBe(true);
+    expect(again.order.paymentStatus).toBe("paid");
+    expect(getMemoryStore().products.find((p) => p.id === productId)!.stock).toBe(
+      4
+    );
+  });
+
+  it("failed payment cannot be confirmed", async () => {
+    const { ref, productId, totalKobo } = await seedPaidPath();
+    const { memMarkOrderPaymentFailed } = await import(
+      "@/lib/server/memory-repo"
+    );
+    memMarkOrderPaymentFailed(ref);
+    expect(() => memConfirmPaidOrder(ref, totalKobo)).toThrow(/failed/);
+    expect(getMemoryStore().products.find((p) => p.id === productId)!.stock).toBe(
+      5
+    );
+  });
+
   it("insufficient stock fails without marking paid", async () => {
     const { ref, productId, totalKobo } = await seedPaidPath(1);
     const product = getMemoryStore().products.find((p) => p.id === productId)!;

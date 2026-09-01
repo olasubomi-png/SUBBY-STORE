@@ -457,14 +457,23 @@ export async function confirmPaidOrder(
       }
     }
 
-    await tx
-      .update(payments)
-      .set({
-        status: "paid",
-        updatedAt: new Date(),
-        ...(rawEventId ? { rawEventId } : {}),
-      })
-      .where(eq(payments.reference, reference));
+    try {
+      await tx
+        .update(payments)
+        .set({
+          status: "paid",
+          updatedAt: new Date(),
+          ...(rawEventId ? { rawEventId } : {}),
+        })
+        .where(eq(payments.reference, reference));
+    } catch (err) {
+      // Unique violation on rawEventId → concurrent identical event already recorded
+      const msg = err instanceof Error ? err.message : String(err);
+      if (rawEventId && /unique|duplicate/i.test(msg)) {
+        return { order: claimed[0], alreadyPaid: true as const };
+      }
+      throw err;
+    }
 
     return { order: claimed[0], alreadyPaid: false as const };
   });

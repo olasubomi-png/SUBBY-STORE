@@ -140,6 +140,8 @@ export const payments = pgTable(
   },
   (t) => [
     uniqueIndex("payments_reference_uidx").on(t.reference),
+    // Postgres allows multiple NULLs in a unique index — only non-null event ids must be unique
+    uniqueIndex("payments_raw_event_id_uidx").on(t.rawEventId),
     index("payments_order_idx").on(t.orderId),
   ]
 );
