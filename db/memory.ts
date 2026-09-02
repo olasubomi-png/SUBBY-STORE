@@ -16,10 +16,15 @@ export type MemoryStore = {
     slug: string;
     description: string;
     logoUrl: string | null;
+    bannerUrl: string | null;
     phone: string | null;
     whatsapp: string | null;
     email: string | null;
     address: string | null;
+    instagramUrl: string | null;
+    facebookUrl: string | null;
+    twitterUrl: string | null;
+    tiktokUrl: string | null;
     currency: string;
     createdAt: Date;
     updatedAt: Date;

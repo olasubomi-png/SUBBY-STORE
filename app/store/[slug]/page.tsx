@@ -1,12 +1,31 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStoreBySlug, listProducts } from "@/lib/server/repo";
 import { Storefront } from "@/components/Storefront";
 
-export default async function PublicStorePage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
+type Props = { params: Promise<{ slug: string }> };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { slug } = await params;
+  const store = await getStoreBySlug(slug);
+  if (!store) {
+    return { title: "Store not found" };
+  }
+  const description =
+    store.description?.trim() ||
+    `Shop ${store.name} on SUBBY-STORE`;
+  return {
+    title: store.name,
+    description,
+    openGraph: {
+      title: store.name,
+      description,
+      ...(store.logoUrl ? { images: [{ url: store.logoUrl }] } : {}),
+    },
+  };
+}
+
+export default async function PublicStorePage({ params }: Props) {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
   if (!store) notFound();
@@ -27,8 +46,14 @@ export default async function PublicStorePage({
         slug: store.slug,
         description: store.description,
         logoUrl: store.logoUrl,
+        bannerUrl: store.bannerUrl,
         phone: store.phone,
         whatsapp: store.whatsapp,
+        email: store.email,
+        instagramUrl: store.instagramUrl,
+        facebookUrl: store.facebookUrl,
+        twitterUrl: store.twitterUrl,
+        tiktokUrl: store.tiktokUrl,
       }}
       products={products}
     />

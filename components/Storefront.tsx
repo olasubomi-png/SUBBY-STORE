@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { formatNgn } from "@/lib/money";
+import {
+  StorefrontHeader,
+  type StorefrontHeaderProps,
+} from "@/components/StorefrontHeader";
 
 export type PublicProduct = {
   id: number;
@@ -14,13 +18,8 @@ export type PublicProduct = {
   imageUrl: string | null;
 };
 
-export type PublicStore = {
-  name: string;
+export type PublicStore = StorefrontHeaderProps & {
   slug: string;
-  description: string;
-  logoUrl: string | null;
-  phone: string | null;
-  whatsapp: string | null;
 };
 
 type CartLine = { productId: number; quantity: number };
@@ -72,26 +71,19 @@ export function Storefront({
 
   return (
     <div className="min-h-screen bg-ink-50 pb-20">
-      <header className="border-b border-ink-100 bg-white">
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-ink-950">
-              {store.name}
-            </h1>
-            {store.description && (
-              <p className="mt-0.5 line-clamp-2 text-sm text-ink-500">
-                {store.description}
-              </p>
-            )}
-          </div>
+      <StorefrontHeader {...store} />
+
+      <div className="sticky top-0 z-10 border-b border-ink-100 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-2.5">
+          <p className="text-sm font-medium text-ink-700">Products</p>
           <Link
             href={`/store/${store.slug}/cart`}
-            className="shrink-0 rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm font-medium text-ink-800"
+            className="rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium text-ink-800"
           >
             Cart ({count})
           </Link>
         </div>
-      </header>
+      </div>
 
       <main className="mx-auto max-w-3xl px-4 py-6">
         {products.length === 0 ? (

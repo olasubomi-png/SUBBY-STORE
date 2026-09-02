@@ -161,22 +161,22 @@ export async function updateStore(
   patch: Partial<{
     name: string;
     description: string;
-    phone: string;
-    whatsapp: string;
-    email: string;
-    address: string;
-    logoUrl: string;
-    slug: string;
+    phone: string | null;
+    whatsapp: string | null;
+    email: string | null;
+    address: string | null;
+    logoUrl: string | null;
+    bannerUrl: string | null;
+    instagramUrl: string | null;
+    facebookUrl: string | null;
+    twitterUrl: string | null;
+    tiktokUrl: string | null;
   }>
 ) {
   await getStoreOwned(storeId, ownerId);
   if (useMemory()) {
     const s = mem.getMemoryStore().stores.find((x) => x.id === storeId)!;
-    Object.assign(s, {
-      ...patch,
-      slug: patch.slug ? slugify(patch.slug) : s.slug,
-      updatedAt: new Date(),
-    });
+    Object.assign(s, { ...patch, updatedAt: new Date() });
     return s;
   }
   const db = getDb();
@@ -188,7 +188,11 @@ export async function updateStore(
   if (patch.email !== undefined) values.email = patch.email;
   if (patch.address !== undefined) values.address = patch.address;
   if (patch.logoUrl !== undefined) values.logoUrl = patch.logoUrl;
-  if (patch.slug !== undefined) values.slug = slugify(patch.slug);
+  if (patch.bannerUrl !== undefined) values.bannerUrl = patch.bannerUrl;
+  if (patch.instagramUrl !== undefined) values.instagramUrl = patch.instagramUrl;
+  if (patch.facebookUrl !== undefined) values.facebookUrl = patch.facebookUrl;
+  if (patch.twitterUrl !== undefined) values.twitterUrl = patch.twitterUrl;
+  if (patch.tiktokUrl !== undefined) values.tiktokUrl = patch.tiktokUrl;
   const rows = await db
     .update(stores)
     .set(values)

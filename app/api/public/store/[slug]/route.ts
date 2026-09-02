@@ -16,6 +16,15 @@ export async function GET(
       name: store.name,
       slug: store.slug,
       description: store.description,
+      logoUrl: store.logoUrl,
+      bannerUrl: store.bannerUrl,
+      phone: store.phone,
+      whatsapp: store.whatsapp,
+      email: store.email,
+      instagramUrl: store.instagramUrl,
+      facebookUrl: store.facebookUrl,
+      twitterUrl: store.twitterUrl,
+      tiktokUrl: store.tiktokUrl,
     },
     products: products.map((p) => ({
       id: p.id,
@@ -24,6 +33,7 @@ export async function GET(
       priceKobo: p.priceKobo,
       stock: p.stock,
       imageUrl: p.imageUrl,
+      category: p.category,
     })),
   });
 }
