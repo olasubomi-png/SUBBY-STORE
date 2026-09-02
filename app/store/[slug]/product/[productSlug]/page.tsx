@@ -20,7 +20,19 @@ export default async function ProductDetailPage({
       <Link href={`/store/${slug}`} className="text-sm text-brand-700">
         ← {store.name}
       </Link>
-      <div className="mt-6 aspect-square rounded-xl bg-ink-100" />
+      <div className="mt-6 aspect-square overflow-hidden rounded-xl bg-ink-100">
+        {product.imageUrl ? (
+          <img
+            src={product.imageUrl}
+            alt={product.name}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-ink-400">
+            No product image
+          </div>
+        )}
+      </div>
       <h1 className="mt-4 text-2xl font-semibold text-ink-950">{product.name}</h1>
       <p className="mt-2 text-xl font-semibold tabular-nums">
         {formatNgn(product.priceKobo)}
