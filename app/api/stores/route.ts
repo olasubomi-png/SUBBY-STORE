@@ -8,11 +8,8 @@ import {
   getStoreOwned,
 } from "@/lib/server/repo";
 import { patchStoreSchema } from "@/lib/stores/schema";
-import {
-  blobBelongsToUser,
-  deleteManagedBlob,
-  isManagedBlobUrl,
-} from "@/lib/server/blob";
+import { tryDeleteManagedBlob } from "@/lib/server/blob";
+import { removeStoreBrandingImage } from "@/lib/server/storeBranding";
 
 const createSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -81,8 +78,26 @@ export async function PATCH(req: Request) {
     }
 
     const data = parsed.data;
-    const existing = await getStoreOwned(data.storeId, session.userId);
+    await getStoreOwned(data.storeId, session.userId);
 
+    if (data.logoUrl === null || data.logoUrl === "") {
+      await removeStoreBrandingImage({
+        userId: session.userId,
+        storeId: data.storeId,
+        kind: "logo",
+      });
+      data.logoUrl = undefined;
+    }
+    if (data.bannerUrl === null || data.bannerUrl === "") {
+      await removeStoreBrandingImage({
+        userId: session.userId,
+        storeId: data.storeId,
+        kind: "banner",
+      });
+      data.bannerUrl = undefined;
+    }
+
+    const existing = await getStoreOwned(data.storeId, session.userId);
     const patch: Parameters<typeof updateStore>[2] = {};
     if (data.name !== undefined) patch.name = data.name;
     if (data.description !== undefined) patch.description = data.description;
@@ -91,8 +106,7 @@ export async function PATCH(req: Request) {
     if (data.email !== undefined) patch.email = emptyToNull(data.email);
     if (data.address !== undefined) patch.address = emptyToNull(data.address);
     if (data.logoUrl !== undefined) patch.logoUrl = emptyToNull(data.logoUrl);
-    if (data.bannerUrl !== undefined)
-      patch.bannerUrl = emptyToNull(data.bannerUrl);
+    if (data.bannerUrl !== undefined) patch.bannerUrl = emptyToNull(data.bannerUrl);
     if (data.instagramUrl !== undefined)
       patch.instagramUrl = emptyToNull(data.instagramUrl);
     if (data.facebookUrl !== undefined)
@@ -102,24 +116,18 @@ export async function PATCH(req: Request) {
     if (data.tiktokUrl !== undefined)
       patch.tiktokUrl = emptyToNull(data.tiktokUrl);
 
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ store: existing });
+    }
+
     const store = await updateStore(session.userId, data.storeId, patch);
 
-    // Best-effort delete of replaced managed blobs
     for (const key of ["logoUrl", "bannerUrl"] as const) {
       if (data[key] === undefined) continue;
       const prev = existing[key];
       const next = store[key];
-      if (
-        prev &&
-        prev !== next &&
-        isManagedBlobUrl(prev) &&
-        blobBelongsToUser(prev, session.userId)
-      ) {
-        try {
-          await deleteManagedBlob(prev, session.userId);
-        } catch {
-          /* ignore */
-        }
+      if (prev && prev !== next) {
+        await tryDeleteManagedBlob(prev, session.userId);
       }
     }
 

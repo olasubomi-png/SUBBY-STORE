@@ -95,16 +95,8 @@ export default function SettingsPage() {
       });
       const upData = await up.json();
       if (!up.ok) throw new Error(upData.error || "Upload failed");
-
-      const field = kind === "logo" ? "logoUrl" : "bannerUrl";
-      const res = await fetch("/api/stores", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId: store.id, [field]: upData.url }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save image");
-      setStore({ ...store, ...data.store });
+      if (upData.store) setStore({ ...store, ...upData.store });
+      else await load();
       setSuccess(kind === "logo" ? "Logo updated" : "Banner updated");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");

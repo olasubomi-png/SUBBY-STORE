@@ -1,10 +1,9 @@
-import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/server/auth";
-import { getStoreOwned } from "@/lib/server/repo";
-
-const MAX = 5 * 1024 * 1024;
-const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+import {
+  replaceStoreBrandingImage,
+  type BrandingKind,
+} from "@/lib/server/storeBranding";
 
 export async function POST(req: Request) {
   const session = await getSession();
@@ -15,7 +14,7 @@ export async function POST(req: Request) {
   try {
     const form = await req.formData();
     const file = form.get("file");
-    const kind = String(form.get("kind") || "");
+    const kind = String(form.get("kind") || "") as BrandingKind;
     const storeId = Number(form.get("storeId"));
 
     if (!(file instanceof File)) {
@@ -31,41 +30,33 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid storeId" }, { status: 400 });
     }
 
-    await getStoreOwned(storeId, session.userId);
-
-    if (!ALLOWED.has(file.type)) {
-      return NextResponse.json(
-        { error: "Only JPG, PNG, and WebP images are allowed" },
-        { status: 400 }
-      );
-    }
-    if (file.size <= 0 || file.size > MAX) {
-      return NextResponse.json(
-        { error: "Image must be 5MB or smaller" },
-        { status: 400 }
-      );
-    }
-
-    const extension =
-      file.type === "image/jpeg"
-        ? "jpg"
-        : file.type === "image/png"
-          ? "png"
-          : "webp";
-
-    const pathname = `stores/${session.userId}/${kind}/${crypto.randomUUID()}.${extension}`;
-
-    const blob = await put(pathname, file, {
-      access: "public",
-      addRandomSuffix: false,
-      contentType: file.type,
+    const result = await replaceStoreBrandingImage({
+      userId: session.userId,
+      storeId,
+      kind,
+      file,
     });
 
-    return NextResponse.json({ url: blob.url, kind });
+    return NextResponse.json({
+      url: result.url,
+      kind,
+      store: result.store,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Upload failed";
-    const status =
-      msg.includes("not found") || msg.includes("Forbidden") ? 403 : 400;
-    return NextResponse.json({ error: msg }, { status });
+    let status = 400;
+    if (msg.includes("not found") || msg.includes("Forbidden")) status = 403;
+    // Do not leak internal stack/details
+    const safe =
+      msg.includes("Only JPG") ||
+      msg.includes("5MB") ||
+      msg.includes("kind must") ||
+      msg.includes("required") ||
+      msg.includes("Invalid") ||
+      msg.includes("Forbidden") ||
+      msg.includes("not found")
+        ? msg
+        : "Failed to upload branding image";
+    return NextResponse.json({ error: safe }, { status });
   }
 }
