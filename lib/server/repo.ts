@@ -128,6 +128,25 @@ export async function getStoreOwned(storeId: number, ownerId: number) {
   return rows[0];
 }
 
+export async function getProductOwned(productId: number, ownerId: number) {
+  if (useMemory()) {
+    const row = mem.getMemoryStore().products.find((x) => x.id === productId);
+    if (!row) throw new Error("Product not found");
+    mem.memGetStoreForOwner(row.storeId, ownerId);
+    return row;
+  }
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(products)
+    .where(eq(products.id, productId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) throw new Error("Product not found");
+  await getStoreOwned(row.storeId, ownerId);
+  return row;
+}
+
 export async function listStoresForOwner(ownerId: number) {
   if (useMemory()) {
     return mem.getMemoryStore().stores.filter((s) => s.ownerId === ownerId);
@@ -231,7 +250,7 @@ export async function updateProduct(
     priceKobo: number;
     stock: number;
     category: string;
-    imageUrl: string;
+    imageUrl: string | null;
     active: boolean;
   }>
 ) {
@@ -240,6 +259,7 @@ export async function updateProduct(
     if (!p) throw new Error("Product not found");
     mem.memGetStoreForOwner(p.storeId, ownerId);
     Object.assign(p, patch, { updatedAt: new Date() });
+    if (patch.imageUrl === null) (p as { imageUrl: string | null }).imageUrl = null;
     return p;
   }
   const db = getDb();

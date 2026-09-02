@@ -22,6 +22,7 @@ export default async function ProductDetailPage({
       </Link>
       <div className="mt-6 aspect-square overflow-hidden rounded-xl bg-ink-100">
         {product.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={product.imageUrl}
             alt={product.name}
@@ -33,18 +34,21 @@ export default async function ProductDetailPage({
           </div>
         )}
       </div>
-      <h1 className="mt-4 text-2xl font-semibold text-ink-950">{product.name}</h1>
-      <p className="mt-2 text-xl font-semibold tabular-nums">
+      <p className="mt-4 text-xs font-medium uppercase tracking-wide text-ink-400">
+        {product.category || "General"}
+      </p>
+      <h1 className="mt-1 text-2xl font-semibold text-ink-950">{product.name}</h1>
+      <p className="mt-2 text-xl font-semibold tabular-nums text-ink-950">
         {formatNgn(product.priceKobo)}
       </p>
       <p className="mt-2 text-sm text-ink-500">
-        {product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}
+        {product.stock > 0 ? "In stock" : "Out of stock"}
       </p>
-      {product.description && (
-        <p className="mt-4 text-sm leading-relaxed text-ink-700">
+      {product.description ? (
+        <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-ink-700">
           {product.description}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
