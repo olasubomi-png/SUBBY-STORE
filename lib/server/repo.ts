@@ -656,21 +656,30 @@ export async function updateOrderStatus(
   orderId: number,
   orderStatus: string
 ) {
-  const allowed = [
+  // Fulfillment transitions sellers may apply. refund_required is terminal
+  // until a dedicated refund-resolution feature is added.
+  const fulfillmentStatuses = [
     "pending",
     "confirmed",
     "processing",
     "shipped",
     "delivered",
     "cancelled",
-    "refund_required",
-  ];
-  if (!allowed.includes(orderStatus)) throw new Error("Invalid order status");
+  ] as const;
+
+  if (!(fulfillmentStatuses as readonly string[]).includes(orderStatus)) {
+    throw new Error("Invalid order status");
+  }
 
   if (useMemory()) {
     const order = mem.getMemoryStore().orders.find((o) => o.id === orderId);
     if (!order) throw new Error("Order not found");
     mem.memGetStoreForOwner(order.storeId, ownerId);
+    if (order.orderStatus === "refund_required") {
+      throw new Error(
+        "Order requires a refund and cannot be moved to fulfillment statuses"
+      );
+    }
     order.orderStatus = orderStatus;
     order.updatedAt = new Date();
     return order;
@@ -684,6 +693,13 @@ export async function updateOrderStatus(
     .limit(1);
   if (!rows[0]) throw new Error("Order not found");
   await getStoreOwned(rows[0].storeId, ownerId);
+
+  if (rows[0].orderStatus === "refund_required") {
+    throw new Error(
+      "Order requires a refund and cannot be moved to fulfillment statuses"
+    );
+  }
+
   const updated = await db
     .update(orders)
     .set({ orderStatus, updatedAt: new Date() })

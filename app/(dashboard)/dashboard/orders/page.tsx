@@ -63,20 +63,22 @@ export default function OrdersPage() {
                   fulfilled.
                 </p>
               ) : null}
-              <div className="mt-3 flex flex-wrap gap-2">
-                {["processing", "shipped", "delivered", "cancelled"].map(
-                  (s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setStatus(o.id, s)}
-                      className="rounded-md border border-ink-200 px-2 py-1 text-xs capitalize text-ink-700"
-                    >
-                      {s}
-                    </button>
-                  )
-                )}
-              </div>
+              {o.orderStatus !== "refund_required" ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {["processing", "shipped", "delivered", "cancelled"].map(
+                    (s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setStatus(o.id, s)}
+                        className="rounded-md border border-ink-200 px-2 py-1 text-xs capitalize text-ink-700"
+                      >
+                        {s}
+                      </button>
+                    )
+                  )}
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>
