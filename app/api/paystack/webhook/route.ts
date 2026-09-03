@@ -62,6 +62,9 @@ export async function POST(req: Request) {
         ok: true,
         alreadyPaid: true,
         orderId: order.id,
+        paymentStatus: order.paymentStatus,
+        orderStatus: order.orderStatus,
+        refundRequired: order.orderStatus === "refund_required",
       });
     }
 
@@ -78,6 +81,9 @@ export async function POST(req: Request) {
       ok: true,
       alreadyPaid: result.alreadyPaid,
       orderId: result.order.id,
+      paymentStatus: result.order.paymentStatus,
+      orderStatus: result.order.orderStatus,
+      refundRequired: Boolean(result.refundRequired),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "webhook_failed";

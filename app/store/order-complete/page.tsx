@@ -1,8 +1,9 @@
 import Link from "next/link";
+import { getOrderByReference } from "@/lib/server/repo";
 
 /**
- * Client redirect landing only. Payment success is authoritative via
- * Paystack webhook + /api/paystack/verify — not this page alone.
+ * Payment status is read from the server/database.
+ * Paystack redirect alone is never treated as proof of payment.
  */
 export default async function OrderCompletePage({
   searchParams,
@@ -14,27 +15,62 @@ export default async function OrderCompletePage({
   }>;
 }) {
   const sp = await searchParams;
-  const paidHint = sp.status === "paid";
+  let orderStatus: string | null = null;
+  let paymentStatus: string | null = null;
+
+  if (sp.ref) {
+    try {
+      const order = await getOrderByReference(sp.ref);
+      if (order) {
+        orderStatus = order.orderStatus;
+        paymentStatus = order.paymentStatus;
+      }
+    } catch {
+      /* ignore lookup failures */
+    }
+  }
+
+  const refundRequired = orderStatus === "refund_required";
+  const paidConfirmed =
+    paymentStatus === "paid" && orderStatus === "confirmed";
+  const pending = !paymentStatus || paymentStatus === "pending";
+
+  let title = "Thanks — order received";
+  let body =
+    "Your order is being confirmed. Payment verification runs on the server.";
+
+  if (refundRequired) {
+    title = "Payment received — refund required";
+    body =
+      "Payment was received, but the item became unavailable. Your order requires a refund. Please contact the store.";
+  } else if (paidConfirmed) {
+    title = "Payment confirmed";
+    body = sp.orderId
+      ? `Order #${sp.orderId} is confirmed. You will be contacted about delivery.`
+      : "Your payment is confirmed. You will be contacted about delivery.";
+  } else if (pending) {
+    title = "Confirming payment";
+    body =
+      "We are verifying your payment with Paystack. This page is not proof of payment by itself.";
+  }
 
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-4 text-center">
-      <h1 className="text-2xl font-semibold text-ink-950">
-        {paidHint ? "Payment received" : "Thanks — order received"}
-      </h1>
-      <p className="mt-2 text-sm text-ink-500">
-        {sp.orderId
-          ? `Order #${sp.orderId} is being confirmed. You will be contacted about delivery once payment is verified.`
-          : "Your order is being confirmed. Payment verification runs on the server."}
-      </p>
+      <h1 className="text-2xl font-semibold text-ink-950">{title}</h1>
+      <p className="mt-2 text-sm text-ink-500">{body}</p>
+      {sp.orderId ? (
+        <p className="mt-3 text-sm text-ink-600">Order #{sp.orderId}</p>
+      ) : null}
       {sp.ref ? (
-        <p className="mt-3 break-all text-xs text-ink-400">
+        <p className="mt-2 break-all text-xs text-ink-400">
           Reference: {sp.ref}
         </p>
       ) : null}
-      <p className="mt-4 text-xs text-ink-400">
-        Do not rely on this page alone as proof of payment. Confirmation is
-        finalized after Paystack verification.
-      </p>
+      {orderStatus ? (
+        <p className="mt-3 text-xs uppercase tracking-wide text-ink-400">
+          Payment {paymentStatus} · Order {orderStatus}
+        </p>
+      ) : null}
       <Link href="/" className="mt-6 text-sm font-medium text-brand-700">
         Back to SUBBY STORE
       </Link>

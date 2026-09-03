@@ -408,7 +408,11 @@ export async function confirmPaidOrder(
           .where(eq(orders.id, byEvent[0].orderId))
           .limit(1);
         if (paidOrder[0]) {
-          return { order: paidOrder[0], alreadyPaid: true as const };
+          return {
+            order: paidOrder[0],
+            alreadyPaid: true as const,
+            refundRequired: paidOrder[0].orderStatus === "refund_required",
+          };
         }
       }
     }
@@ -423,8 +427,13 @@ export async function confirmPaidOrder(
     const order = orderRows[0];
     if (!order) throw new Error("Order not found");
 
+    // Terminal success states (fulfilled or paid-but-unfulfillable)
     if (order.paymentStatus === "paid") {
-      return { order, alreadyPaid: true as const };
+      return {
+        order,
+        alreadyPaid: true as const,
+        refundRequired: order.orderStatus === "refund_required",
+      };
     }
 
     if (order.paymentStatus === "failed") {
@@ -440,6 +449,100 @@ export async function confirmPaidOrder(
       .from(orderItems)
       .where(eq(orderItems.orderId, order.id));
 
+    // Lock product rows in id order to avoid deadlocks across concurrent orders
+    const productIds = [
+      ...new Set(
+        items
+          .map((i) => i.productId)
+          .filter((id): id is number => typeof id === "number" && id > 0)
+      ),
+    ].sort((a, b) => a - b);
+
+    const lockedProducts = new Map<
+      number,
+      { id: number; stock: number; name: string }
+    >();
+    for (const pid of productIds) {
+      const rows = await tx
+        .select()
+        .from(products)
+        .where(eq(products.id, pid))
+        .limit(1)
+        .for("update");
+      if (rows[0]) {
+        lockedProducts.set(pid, {
+          id: rows[0].id,
+          stock: rows[0].stock,
+          name: rows[0].name,
+        });
+      }
+    }
+
+    let stockOk = true;
+    for (const item of items) {
+      if (!item.productId) continue;
+      const p = lockedProducts.get(item.productId);
+      if (!p || p.stock < item.quantity) {
+        stockOk = false;
+        break;
+      }
+    }
+
+    if (!stockOk) {
+      // Payment received, inventory cannot be fulfilled — explicit refund path
+      const claimed = await tx
+        .update(orders)
+        .set({
+          paymentStatus: "paid",
+          orderStatus: "refund_required",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(orders.id, order.id), eq(orders.paymentStatus, "pending"))
+        )
+        .returning();
+
+      if (!claimed[0]) {
+        const refreshed = await tx
+          .select()
+          .from(orders)
+          .where(eq(orders.id, order.id))
+          .limit(1);
+        return {
+          order: refreshed[0] ?? order,
+          alreadyPaid: true as const,
+          refundRequired: (refreshed[0] ?? order).orderStatus === "refund_required",
+        };
+      }
+
+      try {
+        await tx
+          .update(payments)
+          .set({
+            status: "paid",
+            updatedAt: new Date(),
+            ...(rawEventId ? { rawEventId } : {}),
+          })
+          .where(eq(payments.reference, reference));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (rawEventId && /unique|duplicate/i.test(msg)) {
+          return {
+            order: claimed[0],
+            alreadyPaid: true as const,
+            refundRequired: true,
+          };
+        }
+        throw err;
+      }
+
+      return {
+        order: claimed[0],
+        alreadyPaid: false as const,
+        refundRequired: true as const,
+      };
+    }
+
     // Conditional claim: only the first tx that still sees pending proceeds
     const claimed = await tx
       .update(orders)
@@ -454,13 +557,16 @@ export async function confirmPaidOrder(
       .returning();
 
     if (!claimed[0]) {
-      // Lost the race — another confirmation already marked paid
       const refreshed = await tx
         .select()
         .from(orders)
         .where(eq(orders.id, order.id))
         .limit(1);
-      return { order: refreshed[0] ?? order, alreadyPaid: true as const };
+      return {
+        order: refreshed[0] ?? order,
+        alreadyPaid: true as const,
+        refundRequired: (refreshed[0] ?? order).orderStatus === "refund_required",
+      };
     }
 
     for (const item of items) {
@@ -479,6 +585,7 @@ export async function confirmPaidOrder(
         )
         .returning();
       if (!updated[0]) {
+        // Should not happen after FOR UPDATE pre-check — abort transaction
         throw new Error("Insufficient stock at payment confirmation");
       }
     }
@@ -493,15 +600,22 @@ export async function confirmPaidOrder(
         })
         .where(eq(payments.reference, reference));
     } catch (err) {
-      // Unique violation on rawEventId → concurrent identical event already recorded
       const msg = err instanceof Error ? err.message : String(err);
       if (rawEventId && /unique|duplicate/i.test(msg)) {
-        return { order: claimed[0], alreadyPaid: true as const };
+        return {
+          order: claimed[0],
+          alreadyPaid: true as const,
+          refundRequired: false,
+        };
       }
       throw err;
     }
 
-    return { order: claimed[0], alreadyPaid: false as const };
+    return {
+      order: claimed[0],
+      alreadyPaid: false as const,
+      refundRequired: false as const,
+    };
   });
 }
 
@@ -549,6 +663,7 @@ export async function updateOrderStatus(
     "shipped",
     "delivered",
     "cancelled",
+    "refund_required",
   ];
   if (!allowed.includes(orderStatus)) throw new Error("Invalid order status");
 

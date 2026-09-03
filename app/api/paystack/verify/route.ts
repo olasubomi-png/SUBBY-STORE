@@ -31,7 +31,9 @@ export async function GET(req: Request) {
         ok: true,
         alreadyPaid: true,
         orderId: order.id,
-        paymentStatus: "paid",
+        paymentStatus: order.paymentStatus,
+        orderStatus: order.orderStatus,
+        refundRequired: order.orderStatus === "refund_required",
       });
     }
 
@@ -75,6 +77,8 @@ export async function GET(req: Request) {
       alreadyPaid: result.alreadyPaid,
       orderId: result.order.id,
       paymentStatus: result.order.paymentStatus,
+      orderStatus: result.order.orderStatus,
+      refundRequired: Boolean(result.refundRequired),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Verification failed";

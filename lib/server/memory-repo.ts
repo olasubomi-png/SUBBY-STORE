@@ -217,13 +217,17 @@ export function memCreatePendingOrder(input: {
   return { order, cart };
 }
 
-/** Idempotent: marks paid once, decrements stock once. */
+/** Idempotent: marks paid once, decrements stock once (or refund_required). */
 export function memConfirmPaidOrder(reference: string, amountKobo: number) {
   const order = store.orders.find((o) => o.paymentReference === reference);
   if (!order) throw new Error("Order not found");
 
   if (order.paymentStatus === "paid") {
-    return { order, alreadyPaid: true as const };
+    return {
+      order,
+      alreadyPaid: true as const,
+      refundRequired: order.orderStatus === "refund_required",
+    };
   }
 
   if (order.paymentStatus === "failed") {
@@ -234,22 +238,50 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
     throw new Error("Payment amount mismatch");
   }
 
-  // Claim pending → paid before stock moves (lost races become alreadyPaid)
   if (order.paymentStatus !== "pending") {
-    return { order, alreadyPaid: true as const };
+    return {
+      order,
+      alreadyPaid: true as const,
+      refundRequired: order.orderStatus === "refund_required",
+    };
   }
+
+  const items = store.orderItems.filter((i) => i.orderId === order.id);
+
+  // Pre-check all stock — no partial decrements
+  let stockOk = true;
+  for (const item of items) {
+    const product = store.products.find((p) => p.id === item.productId);
+    if (!product || product.stock < item.quantity) {
+      stockOk = false;
+      break;
+    }
+  }
+
+  if (!stockOk) {
+    order.paymentStatus = "paid";
+    order.orderStatus = "refund_required";
+    order.updatedAt = new Date();
+    const payment = store.payments.find((p) => p.reference === reference);
+    if (payment) {
+      payment.status = "paid";
+      payment.updatedAt = new Date();
+    }
+    return {
+      order,
+      alreadyPaid: false as const,
+      refundRequired: true as const,
+    };
+  }
+
   order.paymentStatus = "paid";
   order.orderStatus = "confirmed";
   order.updatedAt = new Date();
 
-  const items = store.orderItems.filter((i) => i.orderId === order.id);
   for (const item of items) {
     const product = store.products.find((p) => p.id === item.productId);
     if (!product) continue;
     if (product.stock < item.quantity) {
-      // roll back claim
-      order.paymentStatus = "pending";
-      order.orderStatus = "pending";
       throw new Error("Insufficient stock at payment confirmation");
     }
     product.stock -= item.quantity;
@@ -262,7 +294,11 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
     payment.updatedAt = new Date();
   }
 
-  return { order, alreadyPaid: false as const };
+  return {
+    order,
+    alreadyPaid: false as const,
+    refundRequired: false as const,
+  };
 }
 
 export function memListOrdersForOwner(ownerId: number) {
@@ -319,13 +355,21 @@ export async function memConfirmPaidOrderWithEvent(
   reference: string,
   amountKobo: number,
   rawEventId?: string | null
-): Promise<{ order: (typeof store.orders)[0]; alreadyPaid: boolean }> {
+): Promise<{
+  order: (typeof store.orders)[0];
+  alreadyPaid: boolean;
+  refundRequired?: boolean;
+}> {
   const run = async () => {
     if (rawEventId) {
       const existing = store.payments.find((p) => p.rawEventId === rawEventId);
       if (existing) {
         const order = store.orders.find((o) => o.id === existing.orderId)!;
-        return { order, alreadyPaid: true as const };
+        return {
+          order,
+          alreadyPaid: true as const,
+          refundRequired: order.orderStatus === "refund_required",
+        };
       }
     }
     const result = memConfirmPaidOrder(reference, amountKobo);
@@ -336,20 +380,23 @@ export async function memConfirmPaidOrderWithEvent(
     return result;
   };
 
-  const prev = confirmLocks.get(reference) ?? Promise.resolve();
+  // Global serialization so concurrent last-unit races across references are ordered
+  // (Postgres uses FOR UPDATE on product rows for the same effect).
+  const lockKey = "__inventory__";
+  const prev = confirmLocks.get(lockKey) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
   const chain = prev.then(() => gate);
-  confirmLocks.set(reference, chain);
+  confirmLocks.set(lockKey, chain);
   await prev;
   try {
     return await run();
   } finally {
     release();
-    if (confirmLocks.get(reference) === chain) {
-      confirmLocks.delete(reference);
+    if (confirmLocks.get(lockKey) === chain) {
+      confirmLocks.delete(lockKey);
     }
   }
 }

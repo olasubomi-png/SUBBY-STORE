@@ -57,6 +57,12 @@ export default function OrdersPage() {
               <p className="mt-1 text-xs uppercase text-ink-400">
                 Payment {o.paymentStatus} · Order {o.orderStatus}
               </p>
+              {o.orderStatus === "refund_required" ? (
+                <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs font-medium text-amber-800">
+                  Refund required — payment received but inventory could not be
+                  fulfilled.
+                </p>
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 {["processing", "shipped", "delivered", "cancelled"].map(
                   (s) => (
