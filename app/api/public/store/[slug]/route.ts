@@ -34,6 +34,7 @@ export async function GET(
       stock: p.stock,
       imageUrl: p.imageUrl,
       category: p.category,
+      active: true,
     })),
   });
 }
