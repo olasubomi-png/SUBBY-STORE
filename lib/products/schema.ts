@@ -35,5 +35,6 @@ export const patchProductSchema = z
     category: z.string().trim().min(1).max(PRODUCT_CATEGORY_MAX).optional(),
     imageUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
     active: z.boolean().optional(),
+    featured: z.boolean().optional(),
   })
   .strict();

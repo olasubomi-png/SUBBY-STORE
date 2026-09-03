@@ -136,6 +136,7 @@ export function memCreateProduct(input: {
     stock: input.stock,
     category: input.category || "General",
     active: true,
+    featured: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

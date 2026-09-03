@@ -12,8 +12,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { title: "Store not found" };
   }
   const description =
-    store.description?.trim() ||
-    `Shop ${store.name} on SUBBY-STORE`;
+    store.description?.trim() || `Shop ${store.name} on SUBBY-STORE`;
   return {
     title: store.name,
     description,
@@ -29,6 +28,7 @@ export default async function PublicStorePage({ params }: Props) {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
   if (!store) notFound();
+  // activeOnly=true — never expose inactive products to the public storefront
   const products = (await listProducts(store.id, true)).map((p) => ({
     id: p.id,
     name: p.name,
@@ -37,6 +37,9 @@ export default async function PublicStorePage({ params }: Props) {
     priceKobo: p.priceKobo,
     stock: p.stock,
     imageUrl: p.imageUrl,
+    category: p.category || "General",
+    featured: Boolean((p as { featured?: boolean }).featured),
+    createdAt: p.createdAt,
   }));
 
   return (

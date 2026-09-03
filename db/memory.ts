@@ -40,6 +40,7 @@ export type MemoryStore = {
     stock: number;
     category: string;
     active: boolean;
+    featured: boolean;
     createdAt: Date;
     updatedAt: Date;
   }>;

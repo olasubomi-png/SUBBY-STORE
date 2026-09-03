@@ -256,6 +256,7 @@ export async function updateProduct(
     category: string;
     imageUrl: string | null;
     active: boolean;
+    featured: boolean;
   }>
 ) {
   if (useMemory()) {
@@ -286,6 +287,7 @@ export async function updateProduct(
   if (patch.category !== undefined) values.category = patch.category;
   if (patch.imageUrl !== undefined) values.imageUrl = patch.imageUrl;
   if (patch.active !== undefined) values.active = patch.active;
+  if (patch.featured !== undefined) values.featured = patch.featured;
   const updated = await db
     .update(products)
     .set(values)

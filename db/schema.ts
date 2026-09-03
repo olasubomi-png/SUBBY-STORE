@@ -71,6 +71,7 @@ export const products = pgTable(
     stock: integer("stock").default(0).notNull(),
     category: varchar("category", { length: 80 }).default("General").notNull(),
     active: boolean("active").default(true).notNull(),
+    featured: boolean("featured").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

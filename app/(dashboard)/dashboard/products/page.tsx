@@ -12,6 +12,7 @@ type Product = {
   stock: number;
   category?: string;
   active: boolean;
+  featured?: boolean;
   imageUrl?: string | null;
 };
 
@@ -22,6 +23,7 @@ type FormState = {
   stock: string;
   category: string;
   active: boolean;
+  featured: boolean;
 };
 
 const blank = (): FormState => ({
@@ -31,6 +33,7 @@ const blank = (): FormState => ({
   stock: "10",
   category: "General",
   active: true,
+  featured: false,
 });
 
 export default function ProductsPage() {
@@ -140,6 +143,7 @@ export default function ProductsPage() {
       stock: String(p.stock),
       category: p.category || "General",
       active: p.active,
+      featured: Boolean(p.featured),
     });
     setError("");
     setSuccess("");
@@ -163,6 +167,7 @@ export default function ProductsPage() {
           stock: Number(edit.stock),
           category: edit.category,
           active: edit.active,
+          featured: edit.featured,
         }),
       });
       const data = await res.json();
@@ -397,6 +402,7 @@ export default function ProductsPage() {
                   <p className="mt-1 text-sm text-ink-600">
                     {formatNgn(p.priceKobo)} · Stock {p.stock} ·{" "}
                     {p.active ? "Active" : "Inactive"}
+                    {p.featured ? " · Featured" : ""}
                   </p>
                 </div>
               </div>
@@ -530,6 +536,16 @@ export default function ProductsPage() {
                       }
                     />
                     Active (visible in store)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={edit.featured}
+                      onChange={(e) =>
+                        setEdit({ ...edit, featured: e.target.checked })
+                      }
+                    />
+                    Featured product
                   </label>
                   <div className="flex gap-2">
                     <button

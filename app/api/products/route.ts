@@ -100,6 +100,7 @@ export async function PATCH(req: Request) {
       category?: string;
       imageUrl?: string | null;
       active?: boolean;
+      featured?: boolean;
     } = {};
 
     if (data.name !== undefined) patch.name = data.name;
@@ -110,6 +111,7 @@ export async function PATCH(req: Request) {
     if (data.stock !== undefined) patch.stock = data.stock;
     if (data.category !== undefined) patch.category = data.category;
     if (data.active !== undefined) patch.active = data.active;
+    if (data.featured !== undefined) patch.featured = data.featured;
     if (data.imageUrl !== undefined) {
       patch.imageUrl =
         data.imageUrl === "" || data.imageUrl === null ? null : data.imageUrl;
