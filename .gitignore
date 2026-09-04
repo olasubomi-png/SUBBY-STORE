@@ -11,3 +11,4 @@ coverage
 db/migrations/meta
 .vercel
 .env*
+logs/
