@@ -16,9 +16,7 @@ export async function POST(req: Request) {
 
   const auth = req.headers.get("authorization") || "";
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const url = new URL(req.url);
-  const q = url.searchParams.get("secret") || "";
-  if (bearer !== secret && q !== secret) {
+  if (bearer !== secret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
