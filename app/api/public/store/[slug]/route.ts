@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { getStoreBySlug, listProducts } from "@/lib/server/repo";
+import {
+  getStoreBySlug,
+  listProducts,
+  releaseExpiredOrderReservations,
+} from "@/lib/server/repo";
 
 export async function GET(
   _req: Request,
@@ -9,6 +13,12 @@ export async function GET(
   const store = await getStoreBySlug(slug);
   if (!store) {
     return NextResponse.json({ error: "Store not found" }, { status: 404 });
+  }
+  // Best-effort: free expired reservations so public stock is closer to truth
+  try {
+    await releaseExpiredOrderReservations(10);
+  } catch {
+    /* ignore cleanup errors on public reads */
   }
   const products = await listProducts(store.id, true);
   return NextResponse.json({

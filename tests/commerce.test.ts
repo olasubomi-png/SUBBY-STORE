@@ -49,7 +49,7 @@ describe("order + payment", () => {
     });
 
     const ref = "ss_test_ref_1";
-    const { order, cart } = memCreatePendingOrder({
+    const { order, cart } = await memCreatePendingOrder({
       storeId: store.id,
       customerName: "Customer",
       customerPhone: "08012345678",
@@ -93,7 +93,7 @@ describe("order + payment", () => {
       priceKobo: 100000,
       stock: 3,
     });
-    memCreatePendingOrder({
+    await memCreatePendingOrder({
       storeId: store.id,
       customerName: "C",
       customerPhone: "0801",

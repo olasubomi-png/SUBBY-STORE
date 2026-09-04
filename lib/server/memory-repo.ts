@@ -6,6 +6,10 @@ import type { MemoryStore } from "@/db/memory";
 import { createMemoryStore } from "@/db/memory";
 import type { CartItemInput, PricedCart } from "@/lib/server/cart";
 import { priceCart } from "@/lib/server/cart";
+import {
+  reservationExpiryDate,
+  isReservationExpired,
+} from "@/lib/server/reservations";
 import { hashPassword, verifyPassword } from "@/lib/server/password";
 import { slugify, isValidSlug } from "@/lib/slug";
 import { assertPositiveKobo } from "@/lib/money";
@@ -158,7 +162,7 @@ export function memPriceCart(
   return priceCart(items, products);
 }
 
-export function memCreatePendingOrder(input: {
+function memCreatePendingOrderUnlocked(input: {
   storeId: number;
   customerName: string;
   customerPhone: string;
@@ -187,12 +191,28 @@ export function memCreatePendingOrder(input: {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  store.orders.push(order as (typeof store.orders)[0]);
+  // Reserve stock (decrement available)
+  for (const line of cart.lines) {
+    const product = store.products.find((p) => p.id === line.productId);
+    if (!product || product.stock < line.quantity) {
+      throw new Error(`Insufficient stock for ${line.name}`);
+    }
+    product.stock -= line.quantity;
+    product.updatedAt = new Date();
+  }
+
+  const expiresAt = reservationExpiryDate();
+  const orderWithRes = {
+    ...order,
+    stockReserved: true,
+    reservationExpiresAt: expiresAt,
+  };
+  store.orders.push(orderWithRes as (typeof store.orders)[0]);
 
   for (const line of cart.lines) {
     store.orderItems.push({
       id: store.seq.item++,
-      orderId: order.id,
+      orderId: orderWithRes.id,
       productId: line.productId,
       productNameSnapshot: line.name,
       unitPriceKoboSnapshot: line.unitPriceKobo,
@@ -203,7 +223,7 @@ export function memCreatePendingOrder(input: {
 
   store.payments.push({
     id: store.seq.payment++,
-    orderId: order.id,
+    orderId: orderWithRes.id,
     reference: input.paymentReference,
     amountKobo: cart.totalKobo,
     currency: "NGN",
@@ -214,8 +234,38 @@ export function memCreatePendingOrder(input: {
     updatedAt: new Date(),
   } as (typeof store.payments)[0]);
 
-  return { order, cart };
+  return { order: orderWithRes, cart };
 }
+
+export async function memCreatePendingOrder(input: {
+  storeId: number;
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  deliveryAddress: string;
+  note?: string;
+  items: import("@/lib/server/cart").CartItemInput[];
+  paymentReference: string;
+}) {
+  const lockKey = "__inventory__";
+  const prev = confirmLocks.get(lockKey) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const chain = prev.then(() => gate);
+  confirmLocks.set(lockKey, chain);
+  await prev;
+  try {
+    return memCreatePendingOrderUnlocked(input);
+  } finally {
+    release();
+    if (confirmLocks.get(lockKey) === chain) {
+      confirmLocks.delete(lockKey);
+    }
+  }
+}
+
 
 /** Idempotent: marks paid once, decrements stock once (or refund_required). */
 export function memConfirmPaidOrder(reference: string, amountKobo: number) {
@@ -247,8 +297,54 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
   }
 
   const items = store.orderItems.filter((i) => i.orderId === order.id);
+  const reserved = Boolean(order.stockReserved);
+  const reservationExpired =
+    reserved && isReservationExpired(order.reservationExpiresAt);
 
-  // Pre-check all stock — no partial decrements
+  if (reserved && !reservationExpired) {
+    order.paymentStatus = "paid";
+    order.orderStatus = "confirmed";
+    order.stockReserved = false;
+    order.reservationExpiresAt = null;
+    order.updatedAt = new Date();
+    const payment = store.payments.find((p) => p.reference === reference);
+    if (payment) {
+      payment.status = "paid";
+      payment.updatedAt = new Date();
+    }
+    return {
+      order,
+      alreadyPaid: false as const,
+      refundRequired: false as const,
+    };
+  }
+
+  if (reserved && reservationExpired) {
+    for (const item of items) {
+      const product = store.products.find((p) => p.id === item.productId);
+      if (product) {
+        product.stock += item.quantity;
+        product.updatedAt = new Date();
+      }
+    }
+    order.paymentStatus = "paid";
+    order.orderStatus = "refund_required";
+    order.stockReserved = false;
+    order.reservationExpiresAt = null;
+    order.updatedAt = new Date();
+    const payment = store.payments.find((p) => p.reference === reference);
+    if (payment) {
+      payment.status = "paid";
+      payment.updatedAt = new Date();
+    }
+    return {
+      order,
+      alreadyPaid: false as const,
+      refundRequired: true as const,
+    };
+  }
+
+  // Legacy (no reservation)
   let stockOk = true;
   for (const item of items) {
     const product = store.products.find((p) => p.id === item.productId);
@@ -276,6 +372,8 @@ export function memConfirmPaidOrder(reference: string, amountKobo: number) {
 
   order.paymentStatus = "paid";
   order.orderStatus = "confirmed";
+  order.stockReserved = false;
+  order.reservationExpiresAt = null;
   order.updatedAt = new Date();
 
   for (const item of items) {
@@ -337,7 +435,23 @@ export function memMarkOrderPaymentFailed(reference: string, reason?: string) {
   if (order.paymentStatus === "paid") {
     throw new Error("Cannot fail a paid order");
   }
+  if (order.paymentStatus === "failed") {
+    return order;
+  }
+  if (order.stockReserved) {
+    const items = store.orderItems.filter((i) => i.orderId === order.id);
+    for (const item of items) {
+      const product = store.products.find((p) => p.id === item.productId);
+      if (product) {
+        product.stock += item.quantity;
+        product.updatedAt = new Date();
+      }
+    }
+    order.stockReserved = false;
+    order.reservationExpiresAt = null;
+  }
   order.paymentStatus = "failed";
+  if (order.orderStatus === "pending") order.orderStatus = "cancelled";
   order.updatedAt = new Date();
   const payment = store.payments.find((p) => p.reference === reference);
   if (payment && payment.status !== "paid") {
@@ -345,6 +459,47 @@ export function memMarkOrderPaymentFailed(reference: string, reason?: string) {
     payment.updatedAt = new Date();
   }
   return order;
+}
+
+export function memReleaseExpiredOrderReservations(limit = 50): {
+  released: number;
+} {
+  const now = new Date();
+  const candidates = store.orders
+    .filter(
+      (o) =>
+        o.stockReserved &&
+        o.paymentStatus === "pending" &&
+        isReservationExpired(o.reservationExpiresAt, now)
+    )
+    .slice(0, limit);
+
+  let released = 0;
+  for (const order of candidates) {
+    if (!order.stockReserved || order.paymentStatus !== "pending") continue;
+    const items = store.orderItems.filter((i) => i.orderId === order.id);
+    for (const item of items) {
+      const product = store.products.find((p) => p.id === item.productId);
+      if (product) {
+        product.stock += item.quantity;
+        product.updatedAt = new Date();
+      }
+    }
+    order.stockReserved = false;
+    order.reservationExpiresAt = null;
+    order.paymentStatus = "failed";
+    order.orderStatus = "expired";
+    order.updatedAt = new Date();
+    const payment = store.payments.find(
+      (p) => p.reference === order.paymentReference
+    );
+    if (payment && payment.status === "pending") {
+      payment.status = "failed";
+      payment.updatedAt = new Date();
+    }
+    released += 1;
+  }
+  return { released };
 }
 
 /**

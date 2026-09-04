@@ -101,12 +101,18 @@ export const orders = pgTable(
     orderStatus: varchar("order_status", { length: 20 }).default("pending").notNull(),
     paymentReference: varchar("payment_reference", { length: 120 }),
     paystackAccessCode: varchar("paystack_access_code", { length: 120 }),
+    /** True while pending checkout holds inventory until payment or expiry */
+    stockReserved: boolean("stock_reserved").default(false).notNull(),
+    reservationExpiresAt: timestamp("reservation_expires_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index("orders_store_idx").on(t.storeId),
     uniqueIndex("orders_payment_ref_uidx").on(t.paymentReference),
+    index("orders_reservation_expiry_idx").on(t.reservationExpiresAt),
   ]
 );
 

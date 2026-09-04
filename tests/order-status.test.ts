@@ -35,7 +35,7 @@ async function seedRefundRequired() {
     stock: 1,
   });
   const ref = `ref_${Math.random().toString(16).slice(2)}`;
-  const { order } = memCreatePendingOrder({
+  const { order } = await memCreatePendingOrder({
     storeId: store.id,
     customerName: "Buyer",
     customerPhone: "08011111111",
@@ -44,8 +44,8 @@ async function seedRefundRequired() {
     items: [{ productId: product.id, quantity: 1 }],
     paymentReference: ref,
   });
-  // Deplete stock after order created
-  getMemoryStore().products.find((p) => p.id === product.id)!.stock = 0;
+  // Expire reservation so payment cannot consume held inventory
+  order.reservationExpiresAt = new Date(Date.now() - 60_000);
   const result = memConfirmPaidOrder(ref, 10000);
   expect(result.refundRequired).toBe(true);
   return { user, order, ref };
@@ -66,7 +66,7 @@ async function seedConfirmed() {
     stock: 5,
   });
   const ref = `ref_${Math.random().toString(16).slice(2)}`;
-  const { order } = memCreatePendingOrder({
+  const { order } = await memCreatePendingOrder({
     storeId: store.id,
     customerName: "Buyer",
     customerPhone: "08011111111",

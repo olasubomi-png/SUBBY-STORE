@@ -59,6 +59,8 @@ export type MemoryStore = {
     orderStatus: string;
     paymentReference: string | null;
     paystackAccessCode: string | null;
+    stockReserved: boolean;
+    reservationExpiresAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }>;

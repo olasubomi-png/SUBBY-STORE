@@ -2,7 +2,7 @@
  * Production repository (Drizzle). Falls back to memory when DATABASE_URL is unset
  * or USE_MEMORY_DB=1 (tests / local without Postgres).
  */
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, lte, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
   users,
@@ -15,9 +15,13 @@ import {
 import * as mem from "@/lib/server/memory-repo";
 import { hashPassword, verifyPassword } from "@/lib/server/password";
 import { slugify, isValidSlug } from "@/lib/slug";
-import { assertPositiveKobo } from "@/lib/money";
+import { assertPositiveKobo, lineTotalKobo, sumKobo } from "@/lib/money";
 import type { CartItemInput } from "@/lib/server/cart";
-import { priceCart } from "@/lib/server/cart";
+import { priceCart, mergeCartItems } from "@/lib/server/cart";
+import {
+  reservationExpiryDate,
+  isReservationExpired,
+} from "@/lib/server/reservations";
 import { allowMemoryDb, isProduction, requireDatabaseUrl } from "@/lib/server/config";
 
 export function useMemory(): boolean {
@@ -326,16 +330,94 @@ export async function createPendingOrder(input: {
   items: CartItemInput[];
   paymentReference: string;
 }) {
-  if (useMemory()) return mem.memCreatePendingOrder(input);
+  if (useMemory()) return await mem.memCreatePendingOrder(input);
 
   const db = getDb();
-  const productRows = await db
-    .select()
-    .from(products)
-    .where(eq(products.storeId, input.storeId));
-  const cart = priceCart(input.items, productRows);
+  const merged = mergeCartItems(input.items);
+  const productIds = [
+    ...new Set(merged.map((i) => i.productId)),
+  ].sort((a, b) => a - b);
 
   return db.transaction(async (tx) => {
+    // Lock products in ascending ID order
+    const locked: Array<{
+      id: number;
+      name: string;
+      priceKobo: number;
+      stock: number;
+      active: boolean;
+      storeId: number;
+    }> = [];
+    for (const pid of productIds) {
+      const rows = await tx
+        .select()
+        .from(products)
+        .where(and(eq(products.id, pid), eq(products.storeId, input.storeId)))
+        .limit(1)
+        .for("update");
+      if (!rows[0]) {
+        throw new Error("Invalid product");
+      }
+      locked.push(rows[0]);
+    }
+
+    const byId = new Map(locked.map((p) => [p.id, p]));
+    const lines: Array<{
+      productId: number;
+      name: string;
+      unitPriceKobo: number;
+      quantity: number;
+      lineTotalKobo: number;
+      stock: number;
+    }> = [];
+
+    for (const item of merged) {
+      const product = byId.get(item.productId);
+      if (!product) throw new Error("Invalid product");
+      if (!product.active) throw new Error("Product is not available");
+      if (item.quantity > product.stock) {
+        throw new Error(`Insufficient stock for ${product.name}`);
+      }
+      const line = lineTotalKobo(product.priceKobo, item.quantity);
+      lines.push({
+        productId: product.id,
+        name: product.name,
+        unitPriceKobo: product.priceKobo,
+        quantity: item.quantity,
+        lineTotalKobo: line,
+        stock: product.stock,
+      });
+    }
+
+    const subtotalKobo = sumKobo(lines.map((l) => l.lineTotalKobo));
+    const cart = {
+      lines,
+      subtotalKobo,
+      totalKobo: subtotalKobo,
+      currency: "NGN" as const,
+    };
+
+    // Reserve: decrement stock atomically
+    for (const line of lines) {
+      const updated = await tx
+        .update(products)
+        .set({
+          stock: sql`${products.stock} - ${line.quantity}`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(products.id, line.productId),
+            sql`${products.stock} >= ${line.quantity}`
+          )
+        )
+        .returning();
+      if (!updated[0]) {
+        throw new Error(`Insufficient stock for ${line.name}`);
+      }
+    }
+
+    const expiresAt = reservationExpiryDate();
     const orderRows = await tx
       .insert(orders)
       .values({
@@ -351,6 +433,8 @@ export async function createPendingOrder(input: {
         paymentStatus: "pending",
         orderStatus: "pending",
         paymentReference: input.paymentReference,
+        stockReserved: true,
+        reservationExpiresAt: expiresAt,
       })
       .returning();
     const order = orderRows[0];
@@ -478,23 +562,19 @@ export async function confirmPaidOrder(
       }
     }
 
-    let stockOk = true;
-    for (const item of items) {
-      if (!item.productId) continue;
-      const p = lockedProducts.get(item.productId);
-      if (!p || p.stock < item.quantity) {
-        stockOk = false;
-        break;
-      }
-    }
+    const reserved = Boolean(order.stockReserved);
+    const reservationExpired =
+      reserved && isReservationExpired(order.reservationExpiresAt);
 
-    if (!stockOk) {
-      // Payment received, inventory cannot be fulfilled — explicit refund path
+    // Active (non-expired) reservation: stock already held — do not re-decrement
+    if (reserved && !reservationExpired) {
       const claimed = await tx
         .update(orders)
         .set({
           paymentStatus: "paid",
-          orderStatus: "refund_required",
+          orderStatus: "confirmed",
+          stockReserved: false,
+          reservationExpiresAt: null,
           updatedAt: new Date(),
         })
         .where(
@@ -511,7 +591,77 @@ export async function confirmPaidOrder(
         return {
           order: refreshed[0] ?? order,
           alreadyPaid: true as const,
-          refundRequired: (refreshed[0] ?? order).orderStatus === "refund_required",
+          refundRequired:
+            (refreshed[0] ?? order).orderStatus === "refund_required",
+        };
+      }
+
+      try {
+        await tx
+          .update(payments)
+          .set({
+            status: "paid",
+            updatedAt: new Date(),
+            ...(rawEventId ? { rawEventId } : {}),
+          })
+          .where(eq(payments.reference, reference));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (rawEventId && /unique|duplicate/i.test(msg)) {
+          return {
+            order: claimed[0],
+            alreadyPaid: true as const,
+            refundRequired: false,
+          };
+        }
+        throw err;
+      }
+
+      return {
+        order: claimed[0],
+        alreadyPaid: false as const,
+        refundRequired: false as const,
+      };
+    }
+
+    // Expired reservation still holding stock: release inventory + refund_required
+    if (reserved && reservationExpired) {
+      for (const item of items) {
+        if (!item.productId) continue;
+        await tx
+          .update(products)
+          .set({
+            stock: sql`${products.stock} + ${item.quantity}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(products.id, item.productId));
+      }
+
+      const claimed = await tx
+        .update(orders)
+        .set({
+          paymentStatus: "paid",
+          orderStatus: "refund_required",
+          stockReserved: false,
+          reservationExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(orders.id, order.id), eq(orders.paymentStatus, "pending"))
+        )
+        .returning();
+
+      if (!claimed[0]) {
+        const refreshed = await tx
+          .select()
+          .from(orders)
+          .where(eq(orders.id, order.id))
+          .limit(1);
+        return {
+          order: refreshed[0] ?? order,
+          alreadyPaid: true as const,
+          refundRequired:
+            (refreshed[0] ?? order).orderStatus === "refund_required",
         };
       }
 
@@ -543,12 +693,79 @@ export async function confirmPaidOrder(
       };
     }
 
-    // Conditional claim: only the first tx that still sees pending proceeds
+    // Legacy path (no reservation): verify stock then decrement
+    let stockOk = true;
+    for (const item of items) {
+      if (!item.productId) continue;
+      const p = lockedProducts.get(item.productId);
+      if (!p || p.stock < item.quantity) {
+        stockOk = false;
+        break;
+      }
+    }
+
+    if (!stockOk) {
+      const claimed = await tx
+        .update(orders)
+        .set({
+          paymentStatus: "paid",
+          orderStatus: "refund_required",
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(orders.id, order.id), eq(orders.paymentStatus, "pending"))
+        )
+        .returning();
+
+      if (!claimed[0]) {
+        const refreshed = await tx
+          .select()
+          .from(orders)
+          .where(eq(orders.id, order.id))
+          .limit(1);
+        return {
+          order: refreshed[0] ?? order,
+          alreadyPaid: true as const,
+          refundRequired:
+            (refreshed[0] ?? order).orderStatus === "refund_required",
+        };
+      }
+
+      try {
+        await tx
+          .update(payments)
+          .set({
+            status: "paid",
+            updatedAt: new Date(),
+            ...(rawEventId ? { rawEventId } : {}),
+          })
+          .where(eq(payments.reference, reference));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (rawEventId && /unique|duplicate/i.test(msg)) {
+          return {
+            order: claimed[0],
+            alreadyPaid: true as const,
+            refundRequired: true,
+          };
+        }
+        throw err;
+      }
+
+      return {
+        order: claimed[0],
+        alreadyPaid: false as const,
+        refundRequired: true as const,
+      };
+    }
+
     const claimed = await tx
       .update(orders)
       .set({
         paymentStatus: "paid",
         orderStatus: "confirmed",
+        stockReserved: false,
+        reservationExpiresAt: null,
         updatedAt: new Date(),
       })
       .where(
@@ -565,7 +782,8 @@ export async function confirmPaidOrder(
       return {
         order: refreshed[0] ?? order,
         alreadyPaid: true as const,
-        refundRequired: (refreshed[0] ?? order).orderStatus === "refund_required",
+        refundRequired:
+          (refreshed[0] ?? order).orderStatus === "refund_required",
       };
     }
 
@@ -585,7 +803,6 @@ export async function confirmPaidOrder(
         )
         .returning();
       if (!updated[0]) {
-        // Should not happen after FOR UPDATE pre-check — abort transaction
         throw new Error("Insufficient stock at payment confirmation");
       }
     }
@@ -732,23 +949,165 @@ export async function dashboardStats(ownerId: number) {
 export async function markOrderPaymentFailed(reference: string) {
   if (useMemory()) return mem.memMarkOrderPaymentFailed(reference);
   const db = getDb();
-  const rows = await db
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.paymentReference, reference))
+      .limit(1)
+      .for("update");
+    const order = rows[0];
+    if (!order) throw new Error("Order not found");
+    if (order.paymentStatus === "paid") {
+      throw new Error("Cannot fail a paid order");
+    }
+    if (order.paymentStatus === "failed") {
+      return { ...order, paymentStatus: "failed" as const };
+    }
+
+    // Release reservation once if still active
+    if (order.stockReserved) {
+      const items = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, order.id));
+      const productIds = [
+        ...new Set(
+          items
+            .map((i) => i.productId)
+            .filter((id): id is number => typeof id === "number" && id > 0)
+        ),
+      ].sort((a, b) => a - b);
+      for (const pid of productIds) {
+        await tx
+          .select()
+          .from(products)
+          .where(eq(products.id, pid))
+          .limit(1)
+          .for("update");
+      }
+      for (const item of items) {
+        if (!item.productId) continue;
+        await tx
+          .update(products)
+          .set({
+            stock: sql`${products.stock} + ${item.quantity}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(products.id, item.productId));
+      }
+    }
+
+    const updated = await tx
+      .update(orders)
+      .set({
+        paymentStatus: "failed",
+        orderStatus:
+          order.orderStatus === "pending" ? "cancelled" : order.orderStatus,
+        stockReserved: false,
+        reservationExpiresAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, order.id))
+      .returning();
+
+    await tx
+      .update(payments)
+      .set({ status: "failed", updatedAt: new Date() })
+      .where(eq(payments.reference, reference));
+
+    return { ...updated[0], paymentStatus: "failed" as const };
+  });
+}
+
+/**
+ * Release expired pending reservations. Idempotent and concurrency-safe.
+ * Returns number of orders released.
+ */
+export async function releaseExpiredOrderReservations(limit = 50): Promise<{
+  released: number;
+}> {
+  if (useMemory()) return mem.memReleaseExpiredOrderReservations(limit);
+
+  const db = getDb();
+  const now = new Date();
+  const candidates = await db
     .select()
     .from(orders)
-    .where(eq(orders.paymentReference, reference))
-    .limit(1);
-  const order = rows[0];
-  if (!order) throw new Error("Order not found");
-  if (order.paymentStatus === "paid") {
-    throw new Error("Cannot fail a paid order");
+    .where(
+      and(
+        eq(orders.stockReserved, true),
+        eq(orders.paymentStatus, "pending"),
+        isNotNull(orders.reservationExpiresAt),
+        lte(orders.reservationExpiresAt, now)
+      )
+    )
+    .limit(limit);
+
+  let released = 0;
+  for (const candidate of candidates) {
+    await db.transaction(async (tx) => {
+      const rows = await tx
+        .select()
+        .from(orders)
+        .where(eq(orders.id, candidate.id))
+        .limit(1)
+        .for("update");
+      const order = rows[0];
+      if (!order) return;
+      if (!order.stockReserved) return;
+      if (order.paymentStatus !== "pending") return;
+      if (!isReservationExpired(order.reservationExpiresAt, now)) return;
+
+      const items = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, order.id));
+      const productIds = [
+        ...new Set(
+          items
+            .map((i) => i.productId)
+            .filter((id): id is number => typeof id === "number" && id > 0)
+        ),
+      ].sort((a, b) => a - b);
+      for (const pid of productIds) {
+        await tx
+          .select()
+          .from(products)
+          .where(eq(products.id, pid))
+          .limit(1)
+          .for("update");
+      }
+      for (const item of items) {
+        if (!item.productId) continue;
+        await tx
+          .update(products)
+          .set({
+            stock: sql`${products.stock} + ${item.quantity}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(products.id, item.productId));
+      }
+
+      await tx
+        .update(orders)
+        .set({
+          stockReserved: false,
+          reservationExpiresAt: null,
+          paymentStatus: "failed",
+          orderStatus: "expired",
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, order.id));
+
+      if (order.paymentReference) {
+        await tx
+          .update(payments)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(payments.reference, order.paymentReference));
+      }
+      released += 1;
+    });
   }
-  await db
-    .update(orders)
-    .set({ paymentStatus: "failed", updatedAt: new Date() })
-    .where(eq(orders.id, order.id));
-  await db
-    .update(payments)
-    .set({ status: "failed", updatedAt: new Date() })
-    .where(eq(payments.reference, reference));
-  return { ...order, paymentStatus: "failed" as const };
+  return { released };
 }

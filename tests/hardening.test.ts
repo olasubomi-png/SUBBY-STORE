@@ -184,7 +184,7 @@ describe("payments idempotency", () => {
       stock: 5,
     });
     const ref = "pay_ref_unique_1";
-    memCreatePendingOrder({
+    await memCreatePendingOrder({
       storeId: store.id,
       customerName: "C",
       customerPhone: "08011111111",
