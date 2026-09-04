@@ -26,21 +26,32 @@ const checkoutSchema = z.object({
 export async function POST(req: Request) {
   try {
     assertProductionConfig();
+
     const body = await req.json();
     const parsed = checkoutSchema.safeParse(body);
+
     if (!parsed.success) {
       return NextResponse.json(
-        { error: parsed.error.errors[0]?.message || "Invalid checkout" },
+        {
+          error:
+            parsed.error.errors[0]?.message ||
+            "Invalid checkout",
+        },
         { status: 400 }
       );
     }
 
     const store = await getStoreBySlug(parsed.data.storeSlug);
+
     if (!store) {
-      return NextResponse.json({ error: "Store not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Store not found" },
+        { status: 404 }
+      );
     }
 
-    const reference = `ss_${store.id}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const reference =
+      `ss_${store.id}_${Date.now()}_${randomUUID().slice(0, 8)}`;
 
     const { order, cart } = await createPendingOrder({
       storeId: store.id,
@@ -53,7 +64,19 @@ export async function POST(req: Request) {
       paymentReference: reference,
     });
 
-    const callbackUrl = `${appUrl()}/store/${store.slug}/order-complete?orderId=${order.id}&ref=${encodeURIComponent(reference)}`;
+    /*
+     * IMPORTANT:
+     * The actual order-complete route is:
+     * /store/order-complete
+     *
+     * Do not include the store slug here.
+     * Paystack redirects back to this global route,
+     * and the page verifies the payment state from the server.
+     */
+    const callbackUrl =
+      `${appUrl()}/store/order-complete` +
+      `?orderId=${encodeURIComponent(order.id)}` +
+      `&ref=${encodeURIComponent(reference)}`;
 
     try {
       const paystack = await initializePaystackTransaction({
@@ -61,7 +84,10 @@ export async function POST(req: Request) {
         amountKobo: cart.totalKobo,
         reference,
         callbackUrl,
-        metadata: { orderId: order.id, storeId: store.id },
+        metadata: {
+          orderId: order.id,
+          storeId: store.id,
+        },
       });
 
       return NextResponse.json({
@@ -71,20 +97,39 @@ export async function POST(req: Request) {
         authorizationUrl: paystack.authorizationUrl,
       });
     } catch (initError) {
-      // Avoid leaving ambiguous pending payment after provider failure
+      /*
+       * If Paystack initialization fails after the pending order
+       * has been created, mark the payment as failed so we don't
+       * leave an ambiguous pending payment behind.
+       */
       try {
         await markOrderPaymentFailed(reference);
       } catch {
-        /* best-effort */
+        /* best-effort cleanup */
       }
+
       const msg =
         initError instanceof Error
           ? initError.message
           : "Unable to initialize payment";
-      return NextResponse.json({ error: msg, orderId: order.id }, { status: 502 });
+
+      return NextResponse.json(
+        {
+          error: msg,
+          orderId: order.id,
+        },
+        { status: 502 }
+      );
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Checkout failed";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    const msg =
+      e instanceof Error
+        ? e.message
+        : "Checkout failed";
+
+    return NextResponse.json(
+      { error: msg },
+      { status: 400 }
+    );
   }
 }
