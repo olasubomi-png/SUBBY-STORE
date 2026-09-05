@@ -13,6 +13,7 @@ import {
 import { hashPassword, verifyPassword } from "@/lib/server/password";
 import { slugify, isValidSlug } from "@/lib/slug";
 import { assertPositiveKobo } from "@/lib/money";
+import { computeSellerAnalyticsFromData } from "@/lib/analytics-math";
 
 let store: MemoryStore = createMemoryStore();
 
@@ -554,4 +555,14 @@ export async function memConfirmPaidOrderWithEvent(
       confirmLocks.delete(lockKey);
     }
   }
+}
+
+export function memGetSellerAnalytics(ownerId: number, periodDays: number) {
+  const ownerStoreIds = new Set(
+    store.stores.filter((s) => s.ownerId === ownerId).map((s) => s.id)
+  );
+  const orderList = store.orders.filter((o) => ownerStoreIds.has(o.storeId));
+  const orderIds = new Set(orderList.map((o) => o.id));
+  const items = store.orderItems.filter((i) => orderIds.has(i.orderId));
+  return computeSellerAnalyticsFromData(periodDays, orderList, items);
 }
