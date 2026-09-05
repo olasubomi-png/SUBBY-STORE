@@ -25,6 +25,7 @@ export async function getSellerAnalytics(
   periodDays: number = 30
 ): Promise<SellerAnalytics> {
   if (useMemory()) {
+    // Test/demo memory repository — production uses Postgres below.
     return mem.memGetSellerAnalytics(ownerId, periodDays);
   }
 

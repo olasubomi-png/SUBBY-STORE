@@ -557,12 +557,33 @@ export async function memConfirmPaidOrderWithEvent(
   }
 }
 
+/**
+ * Memory-repo analytics for tests / USE_MEMORY_DB.
+ * Owner-scoped: only stores owned by ownerId contribute.
+ */
 export function memGetSellerAnalytics(ownerId: number, periodDays: number) {
   const ownerStoreIds = new Set(
     store.stores.filter((s) => s.ownerId === ownerId).map((s) => s.id)
   );
-  const orderList = store.orders.filter((o) => ownerStoreIds.has(o.storeId));
+  const orderList = store.orders
+    .filter((o) => ownerStoreIds.has(o.storeId))
+    .map((o) => ({
+      id: o.id,
+      storeId: o.storeId,
+      totalKobo: o.totalKobo,
+      paymentStatus: o.paymentStatus,
+      orderStatus: o.orderStatus,
+      createdAt: o.createdAt,
+    }));
   const orderIds = new Set(orderList.map((o) => o.id));
-  const items = store.orderItems.filter((i) => orderIds.has(i.orderId));
+  const items = store.orderItems
+    .filter((i) => orderIds.has(i.orderId))
+    .map((i) => ({
+      orderId: i.orderId,
+      productId: i.productId,
+      productNameSnapshot: i.productNameSnapshot || "Product",
+      quantity: i.quantity,
+      lineTotalKobo: i.lineTotalKobo,
+    }));
   return computeSellerAnalyticsFromData(periodDays, orderList, items);
 }

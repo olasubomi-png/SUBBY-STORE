@@ -201,3 +201,46 @@ describe("memory seller isolation", () => {
     expect(a.topProducts).toHaveLength(0);
   });
 });
+
+describe("getSellerAnalytics memory path", () => {
+  beforeEach(() => {
+    resetMemoryStore();
+    process.env.USE_MEMORY_DB = "1";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
+    delete process.env.DATABASE_URL;
+  });
+  afterEach(() => resetMemoryStore());
+
+  it("routes useMemory through memGetSellerAnalytics", async () => {
+    const { getSellerAnalytics } = await import("@/lib/server/analytics");
+    const user = await memSignup({
+      email: "path@ex.com",
+      password: "password12",
+      fullName: "Path",
+    });
+    const shop = memCreateStore({ ownerId: user.id, name: "Path Shop" });
+    const product = memCreateProduct({
+      ownerId: user.id,
+      storeId: shop.id,
+      name: "Widget",
+      priceKobo: 15000,
+      stock: 5,
+    });
+    await memCreatePendingOrder({
+      storeId: shop.id,
+      customerName: "Buyer",
+      customerPhone: "080",
+      customerEmail: "buyer@ex.com",
+      deliveryAddress: "Lagos",
+      items: [{ productId: product.id, quantity: 2 }],
+      paymentReference: "ref_path",
+    });
+    memConfirmPaidOrder("ref_path", 30000);
+
+    const analytics = await getSellerAnalytics(user.id, 30);
+    expect(analytics.kpis.revenueKobo).toBe(30000);
+    expect(analytics.kpis.unitsSold).toBe(2);
+    expect(analytics.kpis.paidOrderCount).toBe(1);
+    expect(typeof memGetSellerAnalytics).toBe("function");
+  });
+});
