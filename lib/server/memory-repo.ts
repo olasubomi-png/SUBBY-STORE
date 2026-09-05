@@ -587,3 +587,40 @@ export function memGetSellerAnalytics(ownerId: number, periodDays: number) {
     }));
   return computeSellerAnalyticsFromData(periodDays, orderList, items);
 }
+
+
+export function memListInventoryForOwner(ownerId: number) {
+  const ownerStores = store.stores.filter((s) => s.ownerId === ownerId);
+  const nameById = new Map(ownerStores.map((s) => [s.id, s.name]));
+  const ids = new Set(ownerStores.map((s) => s.id));
+  return store.products
+    .filter((p) => ids.has(p.storeId))
+    .map((p) => ({
+      ...p,
+      storeName: nameById.get(p.storeId) ?? "Store",
+    }))
+    .sort((a, b) => b.id - a.id);
+}
+
+export function memAdjustProductStock(
+  ownerId: number,
+  productId: number,
+  input: { mode: "set" | "delta"; value: number }
+) {
+  if (!Number.isSafeInteger(input.value)) {
+    throw new Error("Invalid stock value");
+  }
+  if (input.mode === "set" && input.value < 0) {
+    throw new Error("Stock cannot be negative");
+  }
+  const product = store.products.find((p) => p.id === productId);
+  if (!product) throw new Error("Product not found");
+  memGetStoreForOwner(product.storeId, ownerId);
+  let next = product.stock;
+  if (input.mode === "set") next = input.value;
+  else next = product.stock + input.value;
+  if (next < 0) throw new Error("Stock cannot be negative");
+  product.stock = next;
+  product.updatedAt = new Date();
+  return product;
+}

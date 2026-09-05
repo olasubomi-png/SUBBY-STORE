@@ -249,6 +249,88 @@ export async function listProducts(storeId: number, activeOnly = false) {
   return db.select().from(products).where(eq(products.storeId, storeId));
 }
 
+
+export { LOW_STOCK_THRESHOLD, classifyStock } from "@/lib/inventory";
+
+/**
+ * List all products for an owner's stores (inventory view).
+ * Does not expose other sellers' products.
+ */
+export async function listInventoryForOwner(ownerId: number) {
+  if (useMemory()) return mem.memListInventoryForOwner(ownerId);
+  const db = getDb();
+  const ownerStores = await db
+    .select()
+    .from(stores)
+    .where(eq(stores.ownerId, ownerId));
+  if (ownerStores.length === 0) return [];
+  const ids = ownerStores.map((s) => s.id);
+  const storeNameById = new Map(ownerStores.map((s) => [s.id, s.name]));
+  const rows = await db
+    .select()
+    .from(products)
+    .where(sql`${products.storeId} in ${ids}`)
+    .orderBy(desc(products.id));
+  return rows.map((p) => ({
+    ...p,
+    storeName: storeNameById.get(p.storeId) ?? "Store",
+  }));
+}
+
+/**
+ * Atomically adjust product stock with ownership check.
+ * - mode "set": absolute stock (must be >= 0)
+ * - mode "delta": relative change; rejects if result would be negative
+ * Locks the product row (Postgres FOR UPDATE) so checkout reservations
+ * serialize against the same inventory without a second stock system.
+ */
+export async function adjustProductStock(
+  ownerId: number,
+  productId: number,
+  input: { mode: "set" | "delta"; value: number }
+) {
+  if (!Number.isSafeInteger(input.value)) {
+    throw new Error("Invalid stock value");
+  }
+  if (input.mode === "set" && input.value < 0) {
+    throw new Error("Stock cannot be negative");
+  }
+
+  if (useMemory()) {
+    return mem.memAdjustProductStock(ownerId, productId, input);
+  }
+
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1)
+      .for("update");
+    const product = rows[0];
+    if (!product) throw new Error("Product not found");
+    await getStoreOwned(product.storeId, ownerId);
+
+    let next = product.stock;
+    if (input.mode === "set") {
+      next = input.value;
+    } else {
+      next = product.stock + input.value;
+    }
+    if (next < 0) {
+      throw new Error("Stock cannot be negative");
+    }
+
+    const updated = await tx
+      .update(products)
+      .set({ stock: next, updatedAt: new Date() })
+      .where(eq(products.id, productId))
+      .returning();
+    return updated[0];
+  });
+}
+
 export async function updateProduct(
   ownerId: number,
   productId: number,
