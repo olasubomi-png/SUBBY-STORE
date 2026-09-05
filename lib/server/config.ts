@@ -13,6 +13,8 @@ export function isProduction(): boolean {
  */
 export function allowMemoryDb(): boolean {
   if (isProduction()) return false;
+  // Explicit opt-out for PostgreSQL integration tests
+  if (process.env.USE_MEMORY_DB === "0") return false;
   return (
     process.env.USE_MEMORY_DB === "1" ||
     process.env.NODE_ENV === "test" ||

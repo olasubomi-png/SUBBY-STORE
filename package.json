@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "test:postgres": "RUN_POSTGRES_TESTS=1 USE_MEMORY_DB=0 vitest run tests/postgres-concurrency.test.ts"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",

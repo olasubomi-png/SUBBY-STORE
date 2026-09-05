@@ -24,3 +24,12 @@ export function getDb() {
 
 export type { MemoryStore } from "./memory";
 export { createMemoryStore } from "./memory";
+
+/** Close the shared postgres pool (integration tests / process shutdown). */
+export async function closeDb() {
+  if (_client) {
+    await _client.end({ timeout: 5 });
+    _client = null;
+    _db = null;
+  }
+}
