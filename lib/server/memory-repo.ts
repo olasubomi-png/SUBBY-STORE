@@ -602,6 +602,20 @@ export function memListInventoryForOwner(ownerId: number) {
     .sort((a, b) => b.id - a.id);
 }
 
+function memActiveReservedQuantity(productId: number, now = new Date()): number {
+  let total = 0;
+  for (const order of store.orders) {
+    if (!order.stockReserved) continue;
+    if (isReservationExpired(order.reservationExpiresAt, now)) continue;
+    for (const item of store.orderItems) {
+      if (item.orderId === order.id && item.productId === productId) {
+        total += item.quantity;
+      }
+    }
+  }
+  return total;
+}
+
 export function memAdjustProductStock(
   ownerId: number,
   productId: number,
@@ -616,10 +630,16 @@ export function memAdjustProductStock(
   const product = store.products.find((p) => p.id === productId);
   if (!product) throw new Error("Product not found");
   memGetStoreForOwner(product.storeId, ownerId);
+  const reservedQty = memActiveReservedQuantity(productId);
   let next = product.stock;
   if (input.mode === "set") next = input.value;
   else next = product.stock + input.value;
   if (next < 0) throw new Error("Stock cannot be negative");
+  if (next < reservedQty) {
+    throw new Error(
+      "Stock cannot be lower than currently reserved quantity"
+    );
+  }
   product.stock = next;
   product.updatedAt = new Date();
   return product;

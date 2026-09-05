@@ -312,6 +312,24 @@ export async function adjustProductStock(
     if (!product) throw new Error("Product not found");
     await getStoreOwned(product.storeId, ownerId);
 
+    const now = new Date();
+    // Active reservations: stockReserved and not yet expired
+    const reservedRows = await tx
+      .select({
+        qty: sql<number>`COALESCE(SUM(${orderItems.quantity}), 0)`,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(
+        and(
+          eq(orderItems.productId, productId),
+          eq(orders.stockReserved, true),
+          isNotNull(orders.reservationExpiresAt),
+          sql`${orders.reservationExpiresAt} > ${now}`
+        )
+      );
+    const reservedQty = Number(reservedRows[0]?.qty ?? 0);
+
     let next = product.stock;
     if (input.mode === "set") {
       next = input.value;
@@ -320,6 +338,11 @@ export async function adjustProductStock(
     }
     if (next < 0) {
       throw new Error("Stock cannot be negative");
+    }
+    if (next < reservedQty) {
+      throw new Error(
+        "Stock cannot be lower than currently reserved quantity"
+      );
     }
 
     const updated = await tx
@@ -349,8 +372,15 @@ export async function updateProduct(
     const p = mem.getMemoryStore().products.find((x) => x.id === productId);
     if (!p) throw new Error("Product not found");
     mem.memGetStoreForOwner(p.storeId, ownerId);
-    Object.assign(p, patch, { updatedAt: new Date() });
+    const { stock: stockPatch, ...rest } = patch;
+    Object.assign(p, rest, { updatedAt: new Date() });
     if (patch.imageUrl === null) (p as { imageUrl: string | null }).imageUrl = null;
+    if (stockPatch !== undefined) {
+      return mem.memAdjustProductStock(ownerId, productId, {
+        mode: "set",
+        value: stockPatch,
+      });
+    }
     return p;
   }
   const db = getDb();
@@ -369,7 +399,7 @@ export async function updateProduct(
     assertPositiveKobo(patch.priceKobo);
     values.priceKobo = patch.priceKobo;
   }
-  if (patch.stock !== undefined) values.stock = patch.stock;
+  // Stock changes go through adjustProductStock (reservation-aware)
   if (patch.category !== undefined) values.category = patch.category;
   if (patch.imageUrl !== undefined) values.imageUrl = patch.imageUrl;
   if (patch.active !== undefined) values.active = patch.active;
@@ -379,6 +409,14 @@ export async function updateProduct(
     .set(values)
     .where(eq(products.id, productId))
     .returning();
+
+  if (patch.stock !== undefined) {
+    return adjustProductStock(ownerId, productId, {
+      mode: "set",
+      value: patch.stock,
+    });
+  }
+
   return updated[0];
 }
 
