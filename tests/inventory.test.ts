@@ -118,7 +118,7 @@ describe("inventory adjustments", () => {
   });
 });
 
-describe("reserved stock consistency", () => {
+describe("available stock + atomic updates", () => {
   beforeEach(() => {
     resetMemoryStore();
     process.env.USE_MEMORY_DB = "1";
@@ -149,57 +149,70 @@ describe("reserved stock consistency", () => {
       items: [{ productId: product.id, quantity: reserveQty }],
       paymentReference: `ref_res_${Math.random().toString(16).slice(2)}`,
     });
-    // After reservation, available stock is stock - reserveQty
+    // products.stock is available: stock - reserveQty
     return { user, shop, product, reserved: reserveQty };
   }
 
-  it("rejects set below active reserved quantity", async () => {
-    const { user, product } = await seedWithReservation(10, 4);
-    // available after reserve = 6; reserved qty = 4
-    // floor is reserved qty 4
-    expect(() =>
-      memAdjustProductStock(user.id, product.id, { mode: "set", value: 3 })
-    ).toThrow(/reserved quantity/i);
-  });
-
-  it("allows set equal to active reserved quantity", async () => {
-    const { user, product } = await seedWithReservation(10, 4);
-    memAdjustProductStock(user.id, product.id, { mode: "set", value: 4 });
+  it("reservation decrements available stock", async () => {
+    const { product } = await seedWithReservation(10, 4);
     expect(
       getMemoryStore().products.find((p) => p.id === product.id)!.stock
-    ).toBe(4);
+    ).toBe(6);
   });
 
-  it("rejects delta that would go below reserved quantity", async () => {
+  it("available stock may be set to zero while reservations remain", async () => {
     const { user, product } = await seedWithReservation(10, 4);
-    // available is 6; delta -3 → 3 < reserved 4
-    expect(() =>
-      memAdjustProductStock(user.id, product.id, { mode: "delta", value: -3 })
-    ).toThrow(/reserved quantity/i);
-    // delta -2 → 4 == reserved → allowed
-    memAdjustProductStock(user.id, product.id, { mode: "delta", value: -2 });
-    expect(
-      getMemoryStore().products.find((p) => p.id === product.id)!.stock
-    ).toBe(4);
-  });
-
-  it("expired reservations do not block stock adjustment", async () => {
-    const { user, product } = await seedWithReservation(10, 4);
-    const order = getMemoryStore().orders[0];
-    order.reservationExpiresAt = new Date(Date.now() - 60_000);
     memAdjustProductStock(user.id, product.id, { mode: "set", value: 0 });
     expect(
       getMemoryStore().products.find((p) => p.id === product.id)!.stock
     ).toBe(0);
+    // reservation still active
+    expect(getMemoryStore().orders[0].stockReserved).toBe(true);
   });
 
-  it("updateProduct stock path uses reservation protection", async () => {
+  it("rejects negative available stock via delta", async () => {
+    const { user, product } = await seedWithReservation(10, 4);
+    // available is 6
+    expect(() =>
+      memAdjustProductStock(user.id, product.id, { mode: "delta", value: -7 })
+    ).toThrow(/negative/i);
+    expect(
+      getMemoryStore().products.find((p) => p.id === product.id)!.stock
+    ).toBe(6);
+  });
+
+  it("atomic updateProduct: stock failure leaves name unchanged", async () => {
     const { updateProduct } = await import("@/lib/server/repo");
     const { user, product } = await seedWithReservation(10, 4);
+    const originalName = product.name;
+    const originalStock = getMemoryStore().products.find(
+      (p) => p.id === product.id
+    )!.stock;
+
     await expect(
-      updateProduct(user.id, product.id, { stock: 2 })
-    ).rejects.toThrow(/reserved quantity/i);
-    const ok = await updateProduct(user.id, product.id, { stock: 4 });
-    expect(ok.stock).toBe(4);
+      updateProduct(user.id, product.id, {
+        name: "Changed Name",
+        stock: -1,
+      })
+    ).rejects.toThrow(/negative/i);
+
+    const after = getMemoryStore().products.find((p) => p.id === product.id)!;
+    expect(after.name).toBe(originalName);
+    expect(after.stock).toBe(originalStock);
+  });
+
+  it("atomic updateProduct: name and valid stock commit together", async () => {
+    const { updateProduct } = await import("@/lib/server/repo");
+    const { user, product } = await seedWithReservation(10, 4);
+
+    const ok = await updateProduct(user.id, product.id, {
+      name: "Changed Name",
+      stock: 5,
+    });
+    expect(ok.name).toBe("Changed Name");
+    expect(ok.stock).toBe(5);
+    const after = getMemoryStore().products.find((p) => p.id === product.id)!;
+    expect(after.name).toBe("Changed Name");
+    expect(after.stock).toBe(5);
   });
 });

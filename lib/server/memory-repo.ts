@@ -602,20 +602,10 @@ export function memListInventoryForOwner(ownerId: number) {
     .sort((a, b) => b.id - a.id);
 }
 
-function memActiveReservedQuantity(productId: number, now = new Date()): number {
-  let total = 0;
-  for (const order of store.orders) {
-    if (!order.stockReserved) continue;
-    if (isReservationExpired(order.reservationExpiresAt, now)) continue;
-    for (const item of store.orderItems) {
-      if (item.orderId === order.id && item.productId === productId) {
-        total += item.quantity;
-      }
-    }
-  }
-  return total;
-}
-
+/**
+ * products.stock is available units (reservations already decremented it).
+ * Only non-negative available stock is enforced here.
+ */
 export function memAdjustProductStock(
   ownerId: number,
   productId: number,
@@ -630,17 +620,49 @@ export function memAdjustProductStock(
   const product = store.products.find((p) => p.id === productId);
   if (!product) throw new Error("Product not found");
   memGetStoreForOwner(product.storeId, ownerId);
-  const reservedQty = memActiveReservedQuantity(productId);
   let next = product.stock;
   if (input.mode === "set") next = input.value;
   else next = product.stock + input.value;
   if (next < 0) throw new Error("Stock cannot be negative");
-  if (next < reservedQty) {
-    throw new Error(
-      "Stock cannot be lower than currently reserved quantity"
-    );
-  }
   product.stock = next;
+  product.updatedAt = new Date();
+  return product;
+}
+
+/** Atomic product update — validates stock before mutating any field. */
+export function memUpdateProductAtomic(
+  ownerId: number,
+  productId: number,
+  patch: Partial<{
+    name: string;
+    description: string;
+    priceKobo: number;
+    stock: number;
+    category: string;
+    imageUrl: string | null;
+    active: boolean;
+    featured: boolean;
+  }>
+) {
+  const product = store.products.find((p) => p.id === productId);
+  if (!product) throw new Error("Product not found");
+  memGetStoreForOwner(product.storeId, ownerId);
+
+  if (patch.stock !== undefined) {
+    if (!Number.isSafeInteger(patch.stock) || patch.stock < 0) {
+      throw new Error("Stock cannot be negative");
+    }
+  }
+
+  // All-or-nothing: apply only after validation
+  if (patch.name !== undefined) product.name = patch.name;
+  if (patch.description !== undefined) product.description = patch.description;
+  if (patch.priceKobo !== undefined) product.priceKobo = patch.priceKobo;
+  if (patch.stock !== undefined) product.stock = patch.stock;
+  if (patch.category !== undefined) product.category = patch.category;
+  if (patch.imageUrl !== undefined) product.imageUrl = patch.imageUrl;
+  if (patch.active !== undefined) product.active = patch.active;
+  if (patch.featured !== undefined) product.featured = patch.featured;
   product.updatedAt = new Date();
   return product;
 }
