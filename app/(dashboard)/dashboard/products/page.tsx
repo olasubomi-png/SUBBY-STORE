@@ -48,22 +48,43 @@ export default function ProductsPage() {
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   async function load() {
-    const d = await fetch("/api/dashboard").then((r) => r.json());
-    const sid = d.stores?.[0]?.id as number | undefined;
-    if (!sid) {
+    setLoading(true);
+    try {
+      // Single authenticated request — server resolves the seller's store
+      const res = await fetch("/api/products", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          typeof data.error === "string" ? data.error : "Could not load products",
+        );
+        setStoreId(null);
+        setProducts([]);
+        return;
+      }
+      const sid =
+        typeof data.storeId === "number" && data.storeId > 0
+          ? data.storeId
+          : null;
+      setStoreId(sid);
+      setProducts(Array.isArray(data.products) ? data.products : []);
+      setError("");
+    } catch {
+      setError("Could not load products");
       setStoreId(null);
       setProducts([]);
-      return;
+    } finally {
+      setLoading(false);
     }
-    setStoreId(sid);
-    const p = await fetch(`/api/products?storeId=${sid}`).then((r) => r.json());
-    setProducts(p.products || []);
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   function handleCreateImage(file: File | null) {
@@ -253,6 +274,17 @@ export default function ProductsPage() {
       <p className="text-sm text-ink-500">
         Create a store first to manage products.
       </p>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-8 w-40 animate-pulse rounded-lg bg-ink-100" />
+        <div className="h-40 animate-pulse rounded-xl bg-ink-100" />
+        <div className="h-24 animate-pulse rounded-xl bg-ink-100" />
+        <div className="h-24 animate-pulse rounded-xl bg-ink-100" />
+      </div>
     );
   }
 

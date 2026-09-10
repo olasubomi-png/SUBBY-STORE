@@ -178,3 +178,28 @@ describe("blob security", () => {
     expect(isManagedBlobUrl("https://evil.com/products/7/x.jpg")).toBe(false);
   });
 });
+
+
+describe("seller products load path", () => {
+  it("lists products for the owner first store without a separate dashboard call", async () => {
+    const { listStoresForOwner, listProducts } = await import("@/lib/server/repo");
+    const a = await memSignup({
+      email: "prod-load@ex.com",
+      password: "password12",
+      fullName: "Seller",
+    });
+    const store = memCreateStore({ ownerId: a.id, name: "Load Shop" });
+    memCreateProduct({
+      ownerId: a.id,
+      storeId: store.id,
+      name: "Widget",
+      priceKobo: 5000,
+      stock: 3,
+    });
+    const stores = await listStoresForOwner(a.id);
+    expect(stores[0]?.id).toBe(store.id);
+    const products = await listProducts(stores[0]!.id);
+    expect(products).toHaveLength(1);
+    expect(products[0]?.name).toBe("Widget");
+  });
+});

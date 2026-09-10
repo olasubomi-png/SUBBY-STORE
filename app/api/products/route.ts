@@ -7,6 +7,7 @@ import {
   deleteProduct,
   getStoreOwned,
   getProductOwned,
+  listStoresForOwner,
 } from "@/lib/server/repo";
 import { ngnMajorToKobo } from "@/lib/money";
 import {
@@ -24,14 +25,34 @@ export async function GET(req: Request) {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const storeId = Number(new URL(req.url).searchParams.get("storeId"));
-  if (!Number.isSafeInteger(storeId) || storeId <= 0) {
-    return NextResponse.json({ error: "storeId required" }, { status: 400 });
-  }
+
+  const rawStoreId = new URL(req.url).searchParams.get("storeId");
+  let storeId =
+    rawStoreId != null && rawStoreId !== ""
+      ? Number(rawStoreId)
+      : NaN;
+
   try {
+    // When storeId is omitted, resolve the seller's first store in one round-trip
+    // so the products UI does not waterfall /api/dashboard → /api/products.
+    if (!Number.isSafeInteger(storeId) || storeId <= 0) {
+      const stores = await listStoresForOwner(session.userId);
+      const first = stores[0];
+      if (!first) {
+        return NextResponse.json({ products: [], storeId: null, stores: [] });
+      }
+      storeId = first.id;
+      const products = await listProducts(storeId);
+      return NextResponse.json({
+        products,
+        storeId,
+        stores: stores.map((s) => ({ id: s.id, name: s.name, slug: s.slug })),
+      });
+    }
+
     await getStoreOwned(storeId, session.userId);
     const products = await listProducts(storeId);
-    return NextResponse.json({ products });
+    return NextResponse.json({ products, storeId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return NextResponse.json({ error: msg }, { status: 403 });
