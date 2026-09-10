@@ -23,6 +23,8 @@ export const createProductSchema = z.object({
   stock: z.number().int().min(0),
   category: z.string().trim().min(1).max(PRODUCT_CATEGORY_MAX).optional(),
   imageUrl: z.union([z.string().url(), z.literal(""), z.null()]).optional(),
+  /** All gallery URLs (primary first). Max 12. Takes precedence over imageUrl when non-empty. */
+  imageUrls: z.array(z.string().url()).max(12).optional(),
 });
 
 export const patchProductSchema = z

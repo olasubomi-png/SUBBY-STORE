@@ -94,6 +94,24 @@ export async function POST(req: Request) {
       parsed.data.imageUrl && parsed.data.imageUrl !== ""
         ? parsed.data.imageUrl
         : undefined;
+    const imageUrls = Array.isArray(parsed.data.imageUrls)
+      ? parsed.data.imageUrls
+      : undefined;
+
+    // Only accept managed Blob URLs owned by this seller
+    const candidates = [
+      ...(imageUrls || []),
+      ...(imageUrl ? [imageUrl] : []),
+    ];
+    for (const url of candidates) {
+      if (!isManagedBlobUrl(url) || !blobBelongsToUser(url, session.userId)) {
+        return NextResponse.json(
+          { error: "Product images must be uploaded assets for this account" },
+          { status: 400 }
+        );
+      }
+    }
+
     const product = await createProduct({
       ownerId: session.userId,
       storeId: parsed.data.storeId,
@@ -103,6 +121,7 @@ export async function POST(req: Request) {
       stock: parsed.data.stock,
       category: parsed.data.category,
       imageUrl,
+      imageUrls,
     });
     return NextResponse.json({ product });
   } catch (e) {

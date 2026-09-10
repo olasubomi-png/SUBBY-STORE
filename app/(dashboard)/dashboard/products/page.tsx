@@ -136,19 +136,32 @@ export default function ProductsPage() {
     return data.url as string;
   }
 
+  async function cleanupUploadedUrls(urls: string[]) {
+    if (urls.length === 0) return;
+    try {
+      await fetch("/api/uploads/product/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ urls }),
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   async function addProduct(e: React.FormEvent) {
     e.preventDefault();
     if (!storeId || saving) return;
     setSaving(true);
     setError("");
     setSuccess("");
+    const uploadedUrls: string[] = [];
+    let productCreated = false;
     try {
-      let imageUrl = "";
-      const extraUrls: string[] = [];
-      for (let i = 0; i < imageFiles.length; i++) {
-        const url = await uploadFile(imageFiles[i]!);
-        if (i === 0) imageUrl = url;
-        else extraUrls.push(url);
+      for (const file of imageFiles) {
+        const url = await uploadFile(file);
+        uploadedUrls.push(url);
       }
       const res = await fetch("/api/products", {
         method: "POST",
@@ -160,26 +173,28 @@ export default function ProductsPage() {
           priceNgn: Number(create.priceNgn),
           stock: Number(create.stock),
           category: create.category,
-          imageUrl: imageUrl || undefined,
+          imageUrl: uploadedUrls[0] || undefined,
+          imageUrls: uploadedUrls.length > 0 ? uploadedUrls : undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to create product");
-      const newId = data.product?.id as number | undefined;
-      if (newId && extraUrls.length > 0) {
-        for (const url of extraUrls) {
-          await fetch("/api/products/images", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ productId: newId, imageUrl: url }),
-          });
-        }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.error === "string"
+            ? data.error
+            : "Failed to create product",
+        );
       }
+      productCreated = true;
       setCreate(blank());
       clearCreateImages();
       setSuccess("Product added");
       await load();
     } catch (err) {
+      // Only delete blobs when the product was never persisted
+      if (!productCreated && uploadedUrls.length > 0) {
+        await cleanupUploadedUrls(uploadedUrls);
+      }
       setError(err instanceof Error ? err.message : "Failed");
     } finally {
       setSaving(false);
@@ -266,19 +281,29 @@ export default function ProductsPage() {
   async function addGalleryImage(productId: number, file: File) {
     setUploading(true);
     setError("");
+    let uploadedUrl: string | null = null;
+    let registered = false;
     try {
-      const url = await uploadFile(file, productId);
+      uploadedUrl = await uploadFile(file, productId);
       const res = await fetch("/api/products/images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId, imageUrl: url }),
+        body: JSON.stringify({ productId, imageUrl: uploadedUrl }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to add image");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.error === "string" ? data.error : "Failed to add image",
+        );
+      }
+      registered = true;
       if (Array.isArray(data.images)) setEditGallery(data.images);
       setSuccess("Image added");
       await load();
     } catch (err) {
+      if (uploadedUrl && !registered) {
+        await cleanupUploadedUrls([uploadedUrl]);
+      }
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);

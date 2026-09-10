@@ -291,3 +291,68 @@ describe("product gallery", () => {
     ).rejects.toThrow();
   });
 });
+
+
+describe("gallery primary sync and create imageUrls", () => {
+  it("keeps products.imageUrl synced to gallery primary after reorder", async () => {
+    const {
+      addProductImage,
+      reorderProductImages,
+      listProductImages,
+    } = await import("@/lib/server/repo");
+    const a = await memSignup({
+      email: "sync@ex.com",
+      password: "password12",
+      fullName: "Sync",
+    });
+    const store = memCreateStore({ ownerId: a.id, name: "Sync Shop" });
+    const product = memCreateProduct({
+      ownerId: a.id,
+      storeId: store.id,
+      name: "Item",
+      priceKobo: 2000,
+      stock: 1,
+      imageUrl: "https://x.public.blob.vercel-storage.com/products/1/p1.jpg",
+    });
+    await addProductImage(
+      a.id,
+      product.id,
+      "https://x.public.blob.vercel-storage.com/products/1/p2.jpg"
+    );
+    const imgs = await listProductImages(product.id);
+    const reversed = [...imgs].reverse().map((i) => i.id);
+    await reorderProductImages(a.id, product.id, reversed);
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const updated = getMemoryStore().products.find((p) => p.id === product.id);
+    expect(updated?.imageUrl).toBe(
+      imgs[imgs.length - 1]?.imageUrl
+    );
+  });
+
+  it("createProduct accepts imageUrls and stores ordered gallery", async () => {
+    const { createProduct, listProductImages } = await import(
+      "@/lib/server/repo"
+    );
+    const a = await memSignup({
+      email: "multi@ex.com",
+      password: "password12",
+      fullName: "Multi",
+    });
+    const store = memCreateStore({ ownerId: a.id, name: "Multi Shop" });
+    const urls = [
+      "https://x.public.blob.vercel-storage.com/products/9/a.jpg",
+      "https://x.public.blob.vercel-storage.com/products/9/b.jpg",
+    ];
+    const product = await createProduct({
+      ownerId: a.id,
+      storeId: store.id,
+      name: "Multi",
+      priceKobo: 3000,
+      stock: 4,
+      imageUrls: urls,
+    });
+    expect(product.imageUrl).toBe(urls[0]);
+    const gallery = await listProductImages(product.id);
+    expect(gallery.map((g) => g.imageUrl)).toEqual(urls);
+  });
+});

@@ -215,35 +215,72 @@ export async function createProduct(input: {
   stock: number;
   category?: string;
   imageUrl?: string;
+  /** Full gallery (primary first). When set, overrides single imageUrl for gallery rows. */
+  imageUrls?: string[];
 }) {
-  if (useMemory()) return mem.memCreateProduct(input);
+  const gallery = normalizeGalleryUrls(input.imageUrls, input.imageUrl);
+  if (useMemory()) {
+    const product = mem.memCreateProduct({
+      ...input,
+      imageUrl: gallery[0] || input.imageUrl,
+    });
+    // memCreateProduct already seeds primary from imageUrl; add extras
+    for (let i = 1; i < gallery.length; i++) {
+      mem.memAddProductImage(input.ownerId, product.id, gallery[i]!);
+    }
+    return product;
+  }
   await getStoreOwned(input.storeId, input.ownerId);
   assertPositiveKobo(input.priceKobo);
   const db = getDb();
-  let slug = slugify(input.name);
-  const rows = await db
-    .insert(products)
-    .values({
-      storeId: input.storeId,
-      name: input.name.trim(),
-      slug,
-      description: input.description?.trim() || "",
-      priceKobo: input.priceKobo,
-      stock: input.stock,
-      category: input.category || "General",
-      imageUrl: input.imageUrl || null,
-      active: true,
-    })
-    .returning();
-  const product = rows[0]!;
-  if (input.imageUrl) {
-    await db.insert(productImages).values({
-      productId: product.id,
-      imageUrl: input.imageUrl,
-      sortOrder: 0,
-    });
+  const slug = slugify(input.name);
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(products)
+      .values({
+        storeId: input.storeId,
+        name: input.name.trim(),
+        slug,
+        description: input.description?.trim() || "",
+        priceKobo: input.priceKobo,
+        stock: input.stock,
+        category: input.category || "General",
+        imageUrl: gallery[0] || null,
+        active: true,
+      })
+      .returning();
+    const product = rows[0]!;
+    if (gallery.length > 0) {
+      await tx.insert(productImages).values(
+        gallery.map((imageUrl, sortOrder) => ({
+          productId: product.id,
+          imageUrl,
+          sortOrder,
+        }))
+      );
+    }
+    return product;
+  });
+}
+
+function normalizeGalleryUrls(
+  imageUrls?: string[],
+  imageUrl?: string
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (u: string | undefined | null) => {
+    const t = typeof u === "string" ? u.trim() : "";
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+  if (imageUrls && imageUrls.length > 0) {
+    for (const u of imageUrls) push(u);
+  } else {
+    push(imageUrl);
   }
-  return product;
+  return out.slice(0, 12);
 }
 
 export async function listProducts(storeId: number, activeOnly = false) {
