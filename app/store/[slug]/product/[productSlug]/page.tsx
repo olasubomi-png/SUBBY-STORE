@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getStoreBySlug, listProducts } from "@/lib/server/repo";
+import {
+  getStoreBySlug,
+  listProducts,
+  listProductImagesForProducts,
+} from "@/lib/server/repo";
 import { relatedProducts } from "@/lib/storefront/discovery";
 import { ProductCard } from "@/components/ProductCard";
 import { ProductPurchase } from "@/components/ProductPurchase";
@@ -15,18 +19,25 @@ export default async function ProductDetailPage({
   if (!store) notFound();
 
   const active = await listProducts(store.id, true);
-  const catalog = active.map((p) => ({
-    id: p.id,
-    name: p.name,
-    slug: p.slug,
-    description: p.description,
-    priceKobo: p.priceKobo,
-    stock: p.stock,
-    imageUrl: p.imageUrl,
-    category: p.category || "General",
-    featured: Boolean((p as { featured?: boolean }).featured),
-    createdAt: p.createdAt,
-  }));
+  const imageMap = await listProductImagesForProducts(active.map((p) => p.id));
+  const catalog = active.map((p) => {
+    const gallery = (imageMap.get(p.id) || []).map((r) => r.imageUrl);
+    const imageUrls =
+      gallery.length > 0 ? gallery : p.imageUrl ? [p.imageUrl] : [];
+    return {
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+      description: p.description,
+      priceKobo: p.priceKobo,
+      stock: p.stock,
+      imageUrl: imageUrls[0] || p.imageUrl,
+      imageUrls,
+      category: p.category || "General",
+      featured: Boolean((p as { featured?: boolean }).featured),
+      createdAt: p.createdAt,
+    };
+  });
 
   const product = catalog.find((p) => p.slug === productSlug);
   if (!product) notFound();
@@ -56,6 +67,7 @@ export default async function ProductDetailPage({
               category: product.category,
               featured: product.featured,
               imageUrl: product.imageUrl,
+              imageUrls: product.imageUrls,
             }}
           />
         </div>

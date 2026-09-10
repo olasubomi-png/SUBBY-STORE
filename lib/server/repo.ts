@@ -2,12 +2,13 @@
  * Production repository (Drizzle). Falls back to memory when DATABASE_URL is unset
  * or USE_MEMORY_DB=1 (tests / local without Postgres).
  */
-import { eq, and, desc, sql, lte, isNotNull } from "drizzle-orm";
+import { eq, and, desc, asc, sql, lte, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
   users,
   stores,
   products,
+  productImages,
   orders,
   orderItems,
   payments,
@@ -234,7 +235,15 @@ export async function createProduct(input: {
       active: true,
     })
     .returning();
-  return rows[0];
+  const product = rows[0]!;
+  if (input.imageUrl) {
+    await db.insert(productImages).values({
+      productId: product.id,
+      imageUrl: input.imageUrl,
+      sortOrder: 0,
+    });
+  }
+  return product;
 }
 
 export async function listProducts(storeId: number, activeOnly = false) {
@@ -412,6 +421,9 @@ export async function deleteProduct(ownerId: number, productId: number) {
     if (idx < 0) throw new Error("Product not found");
     mem.memGetStoreForOwner(list[idx].storeId, ownerId);
     list.splice(idx, 1);
+    mem.getMemoryStore().productImages = mem
+      .getMemoryStore()
+      .productImages.filter((i) => i.productId !== productId);
     return;
   }
   const db = getDb();
@@ -1215,4 +1227,202 @@ export async function releaseExpiredOrderReservations(limit = 50): Promise<{
     });
   }
   return { released };
+}
+
+
+/** Ordered gallery rows for one product (DB only; use resolve for legacy). */
+export async function listProductImages(productId: number) {
+  if (useMemory()) {
+    mem.memEnsureLegacyGalleryImage(productId);
+    return mem.memListProductImages(productId);
+  }
+  const db = getDb();
+  return db
+    .select()
+    .from(productImages)
+    .where(eq(productImages.productId, productId))
+    .orderBy(asc(productImages.sortOrder), asc(productImages.id));
+}
+
+/** Batch gallery rows keyed by productId. */
+export async function listProductImagesForProducts(productIds: number[]) {
+  if (productIds.length === 0) return new Map<number, Awaited<ReturnType<typeof listProductImages>>>();
+  if (useMemory()) {
+    for (const id of productIds) mem.memEnsureLegacyGalleryImage(id);
+    return mem.memListProductImagesForProducts(productIds);
+  }
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(productImages)
+    .where(sql`${productImages.productId} in ${productIds}`)
+    .orderBy(asc(productImages.sortOrder), asc(productImages.id));
+  const map = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const list = map.get(row.productId) || [];
+    list.push(row);
+    map.set(row.productId, list);
+  }
+  return map;
+}
+
+/**
+ * URLs for display: gallery rows first, then legacy products.imageUrl if gallery empty.
+ */
+export async function getProductImageUrls(productId: number, legacyImageUrl?: string | null) {
+  const rows = await listProductImages(productId);
+  if (rows.length > 0) return rows.map((r) => r.imageUrl);
+  if (legacyImageUrl) return [legacyImageUrl];
+  return [] as string[];
+}
+
+export async function addProductImage(
+  ownerId: number,
+  productId: number,
+  imageUrl: string
+) {
+  if (!imageUrl || typeof imageUrl !== "string") {
+    throw new Error("imageUrl required");
+  }
+  if (useMemory()) {
+    return mem.memAddProductImage(ownerId, productId, imageUrl.trim());
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1)
+      .for("update");
+    const product = rows[0];
+    if (!product) throw new Error("Product not found");
+    await getStoreOwned(product.storeId, ownerId);
+
+    const existing = await tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, productId));
+    if (existing.length >= 12) {
+      throw new Error("Maximum 12 images per product");
+    }
+    const sortOrder =
+      existing.length === 0
+        ? 0
+        : Math.max(...existing.map((i) => i.sortOrder)) + 1;
+    const inserted = await tx
+      .insert(productImages)
+      .values({
+        productId,
+        imageUrl: imageUrl.trim(),
+        sortOrder,
+      })
+      .returning();
+    // Keep legacy primary column in sync with first gallery image
+    const primary = [...existing, inserted[0]!].sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.id - b.id
+    )[0];
+    if (primary) {
+      await tx
+        .update(products)
+        .set({ imageUrl: primary.imageUrl, updatedAt: new Date() })
+        .where(eq(products.id, productId));
+    }
+    return inserted[0];
+  });
+}
+
+export async function deleteProductImage(ownerId: number, imageId: number) {
+  if (useMemory()) {
+    return mem.memDeleteProductImage(ownerId, imageId);
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.id, imageId))
+      .limit(1)
+      .for("update");
+    const img = rows[0];
+    if (!img) throw new Error("Image not found");
+    const prodRows = await tx
+      .select()
+      .from(products)
+      .where(eq(products.id, img.productId))
+      .limit(1)
+      .for("update");
+    const product = prodRows[0];
+    if (!product) throw new Error("Product not found");
+    await getStoreOwned(product.storeId, ownerId);
+    await tx.delete(productImages).where(eq(productImages.id, imageId));
+    const remaining = await tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, product.id))
+      .orderBy(asc(productImages.sortOrder), asc(productImages.id));
+    await tx
+      .update(products)
+      .set({
+        imageUrl: remaining[0]?.imageUrl ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(products.id, product.id));
+    return { deleted: img, productId: product.id };
+  });
+}
+
+export async function reorderProductImages(
+  ownerId: number,
+  productId: number,
+  orderedImageIds: number[]
+) {
+  if (!Array.isArray(orderedImageIds) || orderedImageIds.length === 0) {
+    throw new Error("orderedImageIds required");
+  }
+  if (useMemory()) {
+    return mem.memReorderProductImages(ownerId, productId, orderedImageIds);
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const prodRows = await tx
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1)
+      .for("update");
+    const product = prodRows[0];
+    if (!product) throw new Error("Product not found");
+    await getStoreOwned(product.storeId, ownerId);
+    const existing = await tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, productId));
+    if (existing.length !== orderedImageIds.length) {
+      throw new Error("Image list mismatch");
+    }
+    const idSet = new Set(existing.map((i) => i.id));
+    for (const id of orderedImageIds) {
+      if (!idSet.has(id)) throw new Error("Image not found for product");
+    }
+    for (let i = 0; i < orderedImageIds.length; i++) {
+      await tx
+        .update(productImages)
+        .set({ sortOrder: i })
+        .where(eq(productImages.id, orderedImageIds[i]!));
+    }
+    const primaryId = orderedImageIds[0]!;
+    const primary = existing.find((i) => i.id === primaryId);
+    if (primary) {
+      await tx
+        .update(products)
+        .set({ imageUrl: primary.imageUrl, updatedAt: new Date() })
+        .where(eq(products.id, productId));
+    }
+    return tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, productId))
+      .orderBy(asc(productImages.sortOrder), asc(productImages.id));
+  });
 }

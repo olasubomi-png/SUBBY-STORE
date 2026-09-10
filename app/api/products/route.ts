@@ -8,6 +8,7 @@ import {
   getStoreOwned,
   getProductOwned,
   listStoresForOwner,
+  listProductImagesForProducts,
 } from "@/lib/server/repo";
 import { ngnMajorToKobo } from "@/lib/money";
 import {
@@ -19,6 +20,19 @@ import {
   deleteManagedBlob,
   isManagedBlobUrl,
 } from "@/lib/server/blob";
+
+
+function attachImages(
+  products: Array<{ id: number; imageUrl?: string | null; [k: string]: unknown }>,
+  imageMap: Map<number, Array<{ imageUrl: string }>>
+) {
+  return products.map((p) => {
+    const rows = imageMap.get(p.id) || [];
+    const urls = rows.map((r) => r.imageUrl);
+    if (urls.length === 0 && p.imageUrl) urls.push(p.imageUrl as string);
+    return { ...p, images: urls };
+  });
+}
 
 export async function GET(req: Request) {
   const session = await getSession();
@@ -43,8 +57,9 @@ export async function GET(req: Request) {
       }
       storeId = first.id;
       const products = await listProducts(storeId);
+      const imageMap = await listProductImagesForProducts(products.map((p) => p.id));
       return NextResponse.json({
-        products,
+        products: attachImages(products, imageMap),
         storeId,
         stores: stores.map((s) => ({ id: s.id, name: s.name, slug: s.slug })),
       });
@@ -52,7 +67,8 @@ export async function GET(req: Request) {
 
     await getStoreOwned(storeId, session.userId);
     const products = await listProducts(storeId);
-    return NextResponse.json({ products, storeId });
+    const imageMap = await listProductImagesForProducts(products.map((p) => p.id));
+    return NextResponse.json({ products: attachImages(products, imageMap), storeId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return NextResponse.json({ error: msg }, { status: 403 });

@@ -14,7 +14,11 @@ type Product = {
   active: boolean;
   featured?: boolean;
   imageUrl?: string | null;
+  /** Gallery URLs (primary first); falls back to imageUrl */
+  images?: string[];
 };
+
+type GalleryImage = { id: number; imageUrl: string; sortOrder: number };
 
 type FormState = {
   name: string;
@@ -40,8 +44,9 @@ export default function ProductsPage() {
   const [storeId, setStoreId] = useState<number | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [create, setCreate] = useState<FormState>(blank());
-  const [image, setImage] = useState<File | null>(null);
-  const [preview, setPreview] = useState("");
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
+  const [editGallery, setEditGallery] = useState<GalleryImage[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [edit, setEdit] = useState<FormState>(blank());
   const [error, setError] = useState("");
@@ -87,24 +92,35 @@ export default function ProductsPage() {
     void load();
   }, []);
 
-  function handleCreateImage(file: File | null) {
-    if (preview) URL.revokeObjectURL(preview);
-    if (!file) {
-      setImage(null);
-      setPreview("");
-      return;
-    }
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      setError("Only JPG, PNG, and WebP images are allowed");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setError("Image must be 5MB or smaller");
-      return;
+  function clearCreateImages() {
+    previews.forEach((u) => URL.revokeObjectURL(u));
+    setImageFiles([]);
+    setPreviews([]);
+  }
+
+  function handleCreateImages(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const next: File[] = [...imageFiles];
+    const nextPrev: string[] = [...previews];
+    for (const file of Array.from(files)) {
+      if (next.length >= 12) {
+        setError("Maximum 12 images per product");
+        break;
+      }
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        setError("Only JPG, PNG, and WebP images are allowed");
+        continue;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        setError("Image must be 5MB or smaller");
+        continue;
+      }
+      next.push(file);
+      nextPrev.push(URL.createObjectURL(file));
     }
     setError("");
-    setImage(file);
-    setPreview(URL.createObjectURL(file));
+    setImageFiles(next);
+    setPreviews(nextPrev);
   }
 
   async function uploadFile(file: File, productId?: number) {
@@ -128,7 +144,12 @@ export default function ProductsPage() {
     setSuccess("");
     try {
       let imageUrl = "";
-      if (image) imageUrl = await uploadFile(image);
+      const extraUrls: string[] = [];
+      for (let i = 0; i < imageFiles.length; i++) {
+        const url = await uploadFile(imageFiles[i]!);
+        if (i === 0) imageUrl = url;
+        else extraUrls.push(url);
+      }
       const res = await fetch("/api/products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -144,8 +165,18 @@ export default function ProductsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create product");
+      const newId = data.product?.id as number | undefined;
+      if (newId && extraUrls.length > 0) {
+        for (const url of extraUrls) {
+          await fetch("/api/products/images", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ productId: newId, imageUrl: url }),
+          });
+        }
+      }
       setCreate(blank());
-      handleCreateImage(null);
+      clearCreateImages();
       setSuccess("Product added");
       await load();
     } catch (err) {
@@ -232,19 +263,20 @@ export default function ProductsPage() {
     await load();
   }
 
-  async function replaceImage(productId: number, file: File) {
+  async function addGalleryImage(productId: number, file: File) {
     setUploading(true);
     setError("");
     try {
       const url = await uploadFile(file, productId);
-      const res = await fetch("/api/products", {
-        method: "PATCH",
+      const res = await fetch("/api/products/images", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productId, imageUrl: url }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to set image");
-      setSuccess("Image updated");
+      if (!res.ok) throw new Error(data.error || "Failed to add image");
+      if (Array.isArray(data.images)) setEditGallery(data.images);
+      setSuccess("Image added");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -253,19 +285,40 @@ export default function ProductsPage() {
     }
   }
 
-  async function removeImage(productId: number) {
+  async function removeGalleryImage(imageId: number) {
+    if (imageId <= 0) return;
     if (!confirm("Remove this product image?")) return;
-    const res = await fetch("/api/products", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productId, imageUrl: null }),
+    const res = await fetch(`/api/products/images?imageId=${imageId}`, {
+      method: "DELETE",
     });
     const data = await res.json();
     if (!res.ok) {
       setError(data.error || "Failed");
       return;
     }
+    if (Array.isArray(data.images)) setEditGallery(data.images);
     setSuccess("Image removed");
+    await load();
+  }
+
+  async function setPrimaryImage(productId: number, imageId: number) {
+    if (imageId <= 0 || editGallery.length === 0) return;
+    const ordered = [
+      imageId,
+      ...editGallery.map((g) => g.id).filter((id) => id !== imageId),
+    ];
+    const res = await fetch("/api/products/images", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId, orderedImageIds: ordered }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error || "Failed to set primary");
+      return;
+    }
+    if (Array.isArray(data.images)) setEditGallery(data.images);
+    setSuccess("Primary image updated");
     await load();
   }
 
@@ -372,21 +425,36 @@ export default function ProductsPage() {
           </datalist>
         </label>
         <label className="block text-sm">
-          <span className="text-ink-600">Image (optional)</span>
+          <span className="text-ink-600">Photos (optional, up to 12)</span>
           <input
             type="file"
             accept="image/jpeg,image/png,image/webp"
+            multiple
             className="mt-1 block w-full text-sm"
-            onChange={(e) => handleCreateImage(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              handleCreateImages(e.target.files);
+              e.target.value = "";
+            }}
           />
         </label>
-        {preview ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={preview}
-            alt=""
-            className="h-24 w-24 rounded-lg object-cover"
-          />
+        {previews.length > 0 ? (
+          <ul className="flex flex-wrap gap-2">
+            {previews.map((src, i) => (
+              <li key={src} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={src}
+                  alt=""
+                  className="h-20 w-20 rounded-lg object-cover"
+                />
+                {i === 0 ? (
+                  <span className="absolute left-1 top-1 rounded bg-brand-600 px-1 text-[10px] text-white">
+                    Primary
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         ) : null}
         <button
           type="submit"
@@ -413,10 +481,10 @@ export default function ProductsPage() {
             >
               <div className="flex gap-3">
                 <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-ink-100">
-                  {p.imageUrl ? (
+                  {(p.images?.[0] || p.imageUrl) ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={p.imageUrl}
+                      src={p.images?.[0] || p.imageUrl || ""}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -454,7 +522,7 @@ export default function ProductsPage() {
                   {p.active ? "Deactivate" : "Activate"}
                 </button>
                 <label className="cursor-pointer rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-600">
-                  {uploading ? "Uploading…" : "Replace image"}
+                  {uploading ? "Uploading…" : "Add photo"}
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
@@ -462,20 +530,11 @@ export default function ProductsPage() {
                     disabled={uploading}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
-                      if (f) replaceImage(p.id, f);
+                      if (f) void addGalleryImage(p.id, f);
                       e.target.value = "";
                     }}
                   />
                 </label>
-                {p.imageUrl ? (
-                  <button
-                    type="button"
-                    onClick={() => removeImage(p.id)}
-                    className="rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-600"
-                  >
-                    Remove image
-                  </button>
-                ) : null}
                 <button
                   type="button"
                   onClick={() => remove(p.id)}
@@ -490,6 +549,66 @@ export default function ProductsPage() {
                   onSubmit={saveEdit}
                   className="mt-4 space-y-2 border-t border-ink-100 pt-4"
                 >
+                  
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-ink-600">Gallery</p>
+                    {editGallery.length === 0 ? (
+                      <p className="text-xs text-ink-400">No photos yet</p>
+                    ) : (
+                      <ul className="flex flex-wrap gap-2">
+                        {editGallery.map((g, idx) => (
+                          <li
+                            key={g.id}
+                            className="relative overflow-hidden rounded-lg border border-ink-200"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={g.imageUrl}
+                              alt=""
+                              className="h-20 w-20 object-cover"
+                            />
+                            {idx === 0 ? (
+                              <span className="absolute left-1 top-1 rounded bg-brand-600 px-1 text-[10px] text-white">
+                                Primary
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void setPrimaryImage(p.id, g.id)}
+                                className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-white"
+                              >
+                                Make primary
+                              </button>
+                            )}
+                            {g.id > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => void removeGalleryImage(g.id)}
+                                className="absolute bottom-1 right-1 rounded bg-red-600 px-1 text-[10px] text-white"
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <label className="inline-flex cursor-pointer items-center rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-600">
+                      {uploading ? "Uploading…" : "Add photo"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        disabled={uploading}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void addGalleryImage(p.id, f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+
                   <label className="block text-sm">
                     Name
                     <input

@@ -146,6 +146,15 @@ export function memCreateProduct(input: {
     updatedAt: new Date(),
   };
   store.products.push(row as (typeof store.products)[0]);
+  if (row.imageUrl) {
+    store.productImages.push({
+      id: store.seq.productImage++,
+      productId: row.id,
+      imageUrl: row.imageUrl,
+      sortOrder: 0,
+      createdAt: new Date(),
+    });
+  }
   return row;
 }
 
@@ -665,4 +674,117 @@ export function memUpdateProductAtomic(
   if (patch.featured !== undefined) product.featured = patch.featured;
   product.updatedAt = new Date();
   return product;
+}
+
+
+export function memListProductImages(productId: number) {
+  const store = getMemoryStore();
+  return store.productImages
+    .filter((i) => i.productId === productId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+}
+
+export function memListProductImagesForProducts(productIds: number[]) {
+  const set = new Set(productIds);
+  const store = getMemoryStore();
+  const rows = store.productImages
+    .filter((i) => set.has(i.productId))
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  const map = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const list = map.get(row.productId) || [];
+    list.push(row);
+    map.set(row.productId, list);
+  }
+  return map;
+}
+
+export function memAddProductImage(
+  ownerId: number,
+  productId: number,
+  imageUrl: string
+) {
+  const store = getMemoryStore();
+  const product = store.products.find((p) => p.id === productId);
+  if (!product) throw new Error("Product not found");
+  memGetStoreForOwner(product.storeId, ownerId);
+  const existing = store.productImages.filter((i) => i.productId === productId);
+  const sortOrder =
+    existing.length === 0
+      ? 0
+      : Math.max(...existing.map((i) => i.sortOrder)) + 1;
+  const row = {
+    id: store.seq.productImage++,
+    productId,
+    imageUrl,
+    sortOrder,
+    createdAt: new Date(),
+  };
+  store.productImages.push(row);
+  if (!product.imageUrl) {
+    product.imageUrl = imageUrl;
+  }
+  // Keep primary (sortOrder 0) in sync with products.imageUrl
+  const primary = store.productImages
+    .filter((i) => i.productId === productId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)[0];
+  if (primary) product.imageUrl = primary.imageUrl;
+  return row;
+}
+
+export function memDeleteProductImage(ownerId: number, imageId: number) {
+  const store = getMemoryStore();
+  const img = store.productImages.find((i) => i.id === imageId);
+  if (!img) throw new Error("Image not found");
+  const product = store.products.find((p) => p.id === img.productId);
+  if (!product) throw new Error("Product not found");
+  memGetStoreForOwner(product.storeId, ownerId);
+  store.productImages = store.productImages.filter((i) => i.id !== imageId);
+  const remaining = store.productImages
+    .filter((i) => i.productId === product.id)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  product.imageUrl = remaining[0]?.imageUrl ?? null;
+  return { deleted: img, productId: product.id };
+}
+
+export function memReorderProductImages(
+  ownerId: number,
+  productId: number,
+  orderedImageIds: number[]
+) {
+  const store = getMemoryStore();
+  const product = store.products.find((p) => p.id === productId);
+  if (!product) throw new Error("Product not found");
+  memGetStoreForOwner(product.storeId, ownerId);
+  const images = store.productImages.filter((i) => i.productId === productId);
+  const byId = new Map(images.map((i) => [i.id, i]));
+  if (orderedImageIds.length !== images.length) {
+    throw new Error("Image list mismatch");
+  }
+  for (const id of orderedImageIds) {
+    if (!byId.has(id)) throw new Error("Image not found for product");
+  }
+  orderedImageIds.forEach((id, index) => {
+    byId.get(id)!.sortOrder = index;
+  });
+  product.imageUrl = byId.get(orderedImageIds[0]!)?.imageUrl ?? product.imageUrl;
+  return memListProductImages(productId);
+}
+
+/** Ensure legacy imageUrl appears in gallery for memory store. */
+export function memEnsureLegacyGalleryImage(productId: number) {
+  const store = getMemoryStore();
+  const product = store.products.find((p) => p.id === productId);
+  if (!product?.imageUrl) return;
+  const exists = store.productImages.some(
+    (i) => i.productId === productId && i.imageUrl === product.imageUrl
+  );
+  if (exists) return;
+  store.productImages.push({
+    id: store.seq.productImage++,
+    productId,
+    imageUrl: product.imageUrl,
+    sortOrder: 0,
+    createdAt: new Date(),
+  });
 }

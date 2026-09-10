@@ -203,3 +203,91 @@ describe("seller products load path", () => {
     expect(products[0]?.name).toBe("Widget");
   });
 });
+
+describe("product gallery", () => {
+  it("supports multiple images, primary reorder, and legacy imageUrl", async () => {
+    const {
+      listProductImages,
+      addProductImage,
+      deleteProductImage,
+      reorderProductImages,
+      getProductImageUrls,
+    } = await import("@/lib/server/repo");
+
+    const a = await memSignup({
+      email: "gallery@ex.com",
+      password: "password12",
+      fullName: "Gal",
+    });
+    const store = memCreateStore({ ownerId: a.id, name: "Gallery Shop" });
+    const product = memCreateProduct({
+      ownerId: a.id,
+      storeId: store.id,
+      name: "Shoes",
+      priceKobo: 9000,
+      stock: 2,
+      imageUrl: "https://x.public.blob.vercel-storage.com/products/1/a.jpg",
+    });
+
+    // Legacy URL appears in gallery
+    const initial = await listProductImages(product.id);
+    expect(initial.length).toBeGreaterThanOrEqual(1);
+
+    await addProductImage(
+      a.id,
+      product.id,
+      "https://x.public.blob.vercel-storage.com/products/1/b.jpg"
+    );
+    await addProductImage(
+      a.id,
+      product.id,
+      "https://x.public.blob.vercel-storage.com/products/1/c.jpg"
+    );
+    const all = await listProductImages(product.id);
+    expect(all.length).toBeGreaterThanOrEqual(3);
+
+    const reordered = await reorderProductImages(
+      a.id,
+      product.id,
+      [...all].reverse().map((i) => i.id)
+    );
+    expect(reordered[0]?.id).toBe(all[all.length - 1]?.id);
+
+    const urls = await getProductImageUrls(product.id);
+    expect(urls[0]).toBe(reordered[0]?.imageUrl);
+
+    const removed = await deleteProductImage(a.id, reordered[0]!.id);
+    expect(removed.productId).toBe(product.id);
+  });
+
+  it("rejects cross-seller gallery mutations", async () => {
+    const { addProductImage, deleteProductImage } = await import(
+      "@/lib/server/repo"
+    );
+    const a = await memSignup({
+      email: "own@ex.com",
+      password: "password12",
+      fullName: "Own",
+    });
+    const b = await memSignup({
+      email: "oth@ex.com",
+      password: "password12",
+      fullName: "Oth",
+    });
+    const store = memCreateStore({ ownerId: a.id, name: "Own Shop" });
+    const product = memCreateProduct({
+      ownerId: a.id,
+      storeId: store.id,
+      name: "Bag",
+      priceKobo: 1000,
+      stock: 1,
+    });
+    await expect(
+      addProductImage(
+        b.id,
+        product.id,
+        "https://x.public.blob.vercel-storage.com/products/2/x.jpg"
+      )
+    ).rejects.toThrow();
+  });
+});

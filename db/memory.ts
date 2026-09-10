@@ -44,6 +44,13 @@ export type MemoryStore = {
     createdAt: Date;
     updatedAt: Date;
   }>;
+  productImages: Array<{
+    id: number;
+    productId: number;
+    imageUrl: string;
+    sortOrder: number;
+    createdAt: Date;
+  }>;
   orders: Array<{
     id: number;
     storeId: number;
@@ -92,6 +99,7 @@ export type MemoryStore = {
     order: number;
     item: number;
     payment: number;
+    productImage: number;
   };
 };
 
@@ -103,6 +111,7 @@ export function createMemoryStore(): MemoryStore {
     orders: [],
     orderItems: [],
     payments: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1 },
+    productImages: [],
+    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1 },
   };
 }
