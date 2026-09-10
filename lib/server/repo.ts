@@ -2,7 +2,7 @@
  * Production repository (Drizzle). Falls back to memory when DATABASE_URL is unset
  * or USE_MEMORY_DB=1 (tests / local without Postgres).
  */
-import { eq, and, desc, asc, sql, lte, isNotNull } from "drizzle-orm";
+import { eq, and, desc, sql, lte, isNotNull, inArray, asc } from "drizzle-orm";
 import { getDb } from "@/db/client";
 import {
   users,
@@ -233,8 +233,8 @@ export async function createProduct(input: {
   await getStoreOwned(input.storeId, input.ownerId);
   assertPositiveKobo(input.priceKobo);
   const db = getDb();
-  const slug = slugify(input.name);
   return db.transaction(async (tx) => {
+    const slug = await uniqueProductSlug(input.storeId, input.name, tx);
     const rows = await tx
       .insert(products)
       .values({
@@ -472,6 +472,153 @@ export async function deleteProduct(ownerId: number, productId: number) {
   if (!rows[0]) throw new Error("Product not found");
   await getStoreOwned(rows[0].storeId, ownerId);
   await db.delete(products).where(eq(products.id, productId));
+}
+
+
+/** Unique product slug within a store (appends -2, -3, …). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function uniqueProductSlug(
+  storeId: number,
+  baseName: string,
+  // Drizzle transaction client
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  executor?: any
+): Promise<string> {
+  const base = (slugify(baseName) || "product").slice(0, 100);
+  const run = executor ?? getDb();
+  let candidate = base;
+  for (let n = 2; n < 200; n++) {
+    const rows = await run
+      .select({ id: products.id })
+      .from(products)
+      .where(and(eq(products.storeId, storeId), eq(products.slug, candidate)))
+      .limit(1);
+    if (rows.length === 0) return candidate;
+    const suffix = `-${n}`;
+    candidate = `${base.slice(0, Math.max(1, 100 - suffix.length))}${suffix}`;
+  }
+  throw new Error("Could not allocate unique product slug");
+}
+
+/**
+ * Duplicate a product for the owning seller.
+ * Reuses existing gallery image URLs (no Blob copy).
+ */
+export async function duplicateProduct(ownerId: number, productId: number) {
+  if (useMemory()) {
+    return mem.memDuplicateProduct(ownerId, productId);
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(products)
+      .where(eq(products.id, productId))
+      .limit(1)
+      .for("update");
+    const source = rows[0];
+    if (!source) throw new Error("Product not found");
+    await getStoreOwned(source.storeId, ownerId);
+
+    const slug = await uniqueProductSlug(source.storeId, `${source.name}-copy`, tx);
+    const inserted = await tx
+      .insert(products)
+      .values({
+        storeId: source.storeId,
+        name: `${source.name} (copy)`,
+        slug,
+        description: source.description,
+        priceKobo: source.priceKobo,
+        stock: source.stock,
+        category: source.category,
+        imageUrl: source.imageUrl,
+        active: source.active,
+        featured: source.featured,
+      })
+      .returning();
+    const copy = inserted[0]!;
+
+    const gallery = await tx
+      .select()
+      .from(productImages)
+      .where(eq(productImages.productId, productId))
+      .orderBy(asc(productImages.sortOrder), asc(productImages.id));
+
+    if (gallery.length > 0) {
+      await tx.insert(productImages).values(
+        gallery.map((g, sortOrder) => ({
+          productId: copy.id,
+          imageUrl: g.imageUrl,
+          sortOrder,
+        }))
+      );
+      await tx
+        .update(products)
+        .set({ imageUrl: gallery[0]!.imageUrl, updatedAt: new Date() })
+        .where(eq(products.id, copy.id));
+    }
+    return copy;
+  });
+}
+
+/** Bulk activate/deactivate products owned by seller. */
+export async function bulkSetProductsActive(
+  ownerId: number,
+  productIds: number[],
+  active: boolean
+) {
+  const ids = [...new Set(productIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return { updated: 0 };
+  if (useMemory()) {
+    return mem.memBulkSetProductsActive(ownerId, ids, active);
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const owned = await tx
+      .select({ id: products.id, storeId: products.storeId })
+      .from(products)
+      .where(inArray(products.id, ids));
+    if (owned.length !== ids.length) {
+      throw new Error("One or more products were not found");
+    }
+    for (const p of owned) {
+      await getStoreOwned(p.storeId, ownerId);
+    }
+    const updated = await tx
+      .update(products)
+      .set({ active, updatedAt: new Date() })
+      .where(inArray(products.id, ids))
+      .returning({ id: products.id });
+    return { updated: updated.length };
+  });
+}
+
+/** Bulk delete products owned by seller. */
+export async function bulkDeleteProducts(ownerId: number, productIds: number[]) {
+  const ids = [...new Set(productIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return { deleted: 0 };
+  if (useMemory()) {
+    return mem.memBulkDeleteProducts(ownerId, ids);
+  }
+  const db = getDb();
+  return db.transaction(async (tx) => {
+    const owned = await tx
+      .select({ id: products.id, storeId: products.storeId })
+      .from(products)
+      .where(inArray(products.id, ids));
+    if (owned.length !== ids.length) {
+      throw new Error("One or more products were not found");
+    }
+    for (const p of owned) {
+      await getStoreOwned(p.storeId, ownerId);
+    }
+    // product_images cascade via FK; delete products
+    const deleted = await tx
+      .delete(products)
+      .where(inArray(products.id, ids))
+      .returning({ id: products.id });
+    return { deleted: deleted.length };
+  });
 }
 
 export async function createPendingOrder(input: {

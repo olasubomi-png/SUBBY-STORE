@@ -356,3 +356,132 @@ describe("gallery primary sync and create imageUrls", () => {
     expect(gallery.map((g) => g.imageUrl)).toEqual(urls);
   });
 });
+
+describe("product management 2.0", () => {
+  beforeEach(() => {
+    resetMemoryStore();
+    process.env.USE_MEMORY_DB = "1";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
+  });
+  afterEach(() => resetMemoryStore());
+
+  async function seedTwoSellers() {
+    const a = await memSignup({
+      email: `a-${Math.random().toString(16).slice(2)}@ex.com`,
+      password: "password12",
+      fullName: "A",
+    });
+    const b = await memSignup({
+      email: `b-${Math.random().toString(16).slice(2)}@ex.com`,
+      password: "password12",
+      fullName: "B",
+    });
+    const shopA = memCreateStore({ ownerId: a.id, name: "Shop A" });
+    const shopB = memCreateStore({ ownerId: b.id, name: "Shop B" });
+    const p1 = memCreateProduct({
+      ownerId: a.id,
+      storeId: shopA.id,
+      name: "Alpha Tee",
+      priceKobo: 500000,
+      stock: 3,
+      category: "Fashion",
+    });
+    // gallery extra
+    const { memAddProductImage } = await import("@/lib/server/memory-repo");
+    memAddProductImage(a.id, p1.id, "https://example.com/a1.jpg");
+    memAddProductImage(a.id, p1.id, "https://example.com/a2.jpg");
+    const p2 = memCreateProduct({
+      ownerId: a.id,
+      storeId: shopA.id,
+      name: "Beta Mug",
+      priceKobo: 200000,
+      stock: 0,
+      category: "Home",
+    });
+    const pB = memCreateProduct({
+      ownerId: b.id,
+      storeId: shopB.id,
+      name: "Other",
+      priceKobo: 100000,
+      stock: 10,
+    });
+    return { a, b, shopA, p1, p2, pB };
+  }
+
+  it("bulk activates and deactivates owned products", async () => {
+    const { bulkSetProductsActive } = await import("@/lib/server/repo");
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const { a, p1, p2 } = await seedTwoSellers();
+    await bulkSetProductsActive(a.id, [p1.id, p2.id], false);
+    expect(getMemoryStore().products.find((p) => p.id === p1.id)!.active).toBe(
+      false
+    );
+    expect(getMemoryStore().products.find((p) => p.id === p2.id)!.active).toBe(
+      false
+    );
+    await bulkSetProductsActive(a.id, [p1.id], true);
+    expect(getMemoryStore().products.find((p) => p.id === p1.id)!.active).toBe(
+      true
+    );
+  });
+
+  it("bulk delete removes owned products only", async () => {
+    const { bulkDeleteProducts } = await import("@/lib/server/repo");
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const { a, b, p1, p2, pB } = await seedTwoSellers();
+    await bulkDeleteProducts(a.id, [p1.id, p2.id]);
+    expect(getMemoryStore().products.find((p) => p.id === p1.id)).toBeUndefined();
+    expect(getMemoryStore().products.find((p) => p.id === pB.id)).toBeTruthy();
+    await expect(bulkDeleteProducts(a.id, [pB.id])).rejects.toThrow();
+    expect(getMemoryStore().products.find((p) => p.id === pB.id)).toBeTruthy();
+  });
+
+  it("duplicate creates unique slug and preserves gallery order", async () => {
+    const { duplicateProduct, getProductImageUrls } = await import(
+      "@/lib/server/repo"
+    );
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const { a, p1 } = await seedTwoSellers();
+    const copy = await duplicateProduct(a.id, p1.id);
+    expect(copy.id).not.toBe(p1.id);
+    expect(copy.name).toContain("(copy)");
+    expect(copy.slug).not.toBe(
+      getMemoryStore().products.find((p) => p.id === p1.id)!.slug
+    );
+    expect(copy.priceKobo).toBe(500000);
+    expect(copy.stock).toBe(3);
+    expect(copy.category).toBe("Fashion");
+    const urls = await getProductImageUrls(copy.id, copy.imageUrl);
+    // primary from create + two added = up to 3; memCreate may seed empty
+    expect(urls.length).toBeGreaterThanOrEqual(2);
+    expect(urls[0]).toBe("https://example.com/a1.jpg");
+    expect(urls[1]).toBe("https://example.com/a2.jpg");
+    // second duplicate still unique slug
+    const copy2 = await duplicateProduct(a.id, p1.id);
+    expect(copy2.slug).not.toBe(copy.slug);
+  });
+
+  it("blocks cross-owner bulk and duplicate", async () => {
+    const {
+      bulkSetProductsActive,
+      bulkDeleteProducts,
+      duplicateProduct,
+    } = await import("@/lib/server/repo");
+    const { a, b, p1, pB } = await seedTwoSellers();
+    await expect(
+      bulkSetProductsActive(b.id, [p1.id], false)
+    ).rejects.toThrow();
+    await expect(bulkDeleteProducts(b.id, [p1.id])).rejects.toThrow();
+    await expect(duplicateProduct(b.id, p1.id)).rejects.toThrow();
+    await expect(duplicateProduct(a.id, pB.id)).rejects.toThrow();
+  });
+
+  it("classifies low stock for filter threshold", async () => {
+    const { classifyStock, LOW_STOCK_THRESHOLD } = await import(
+      "@/lib/inventory"
+    );
+    expect(classifyStock(0)).toBe("out");
+    expect(classifyStock(LOW_STOCK_THRESHOLD)).toBe("low");
+    expect(classifyStock(LOW_STOCK_THRESHOLD + 1)).toBe("in");
+  });
+});

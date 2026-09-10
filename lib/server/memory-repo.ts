@@ -158,6 +158,85 @@ export function memCreateProduct(input: {
   return row;
 }
 
+
+function memUniqueProductSlug(storeId: number, baseName: string): string {
+  const base = (slugify(baseName) || "product").slice(0, 100);
+  let candidate = base;
+  for (let n = 2; n < 200; n++) {
+    const clash = store.products.some(
+      (p) => p.storeId === storeId && p.slug === candidate
+    );
+    if (!clash) return candidate;
+    const suffix = `-${n}`;
+    candidate = `${base.slice(0, Math.max(1, 100 - suffix.length))}${suffix}`;
+  }
+  throw new Error("Could not allocate unique product slug");
+}
+
+export function memDuplicateProduct(ownerId: number, productId: number) {
+  const source = store.products.find((p) => p.id === productId);
+  if (!source) throw new Error("Product not found");
+  memGetStoreForOwner(source.storeId, ownerId);
+  const slug = memUniqueProductSlug(source.storeId, `${source.name}-copy`);
+  const copy = {
+    ...source,
+    id: store.seq.product++,
+    name: `${source.name} (copy)`,
+    slug,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  store.products.push(copy);
+  const gallery = store.productImages
+    .filter((i) => i.productId === productId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  for (let i = 0; i < gallery.length; i++) {
+    store.productImages.push({
+      id: store.seq.productImage++,
+      productId: copy.id,
+      imageUrl: gallery[i]!.imageUrl,
+      sortOrder: i,
+      createdAt: new Date(),
+    });
+  }
+  if (gallery.length > 0) {
+    copy.imageUrl = gallery[0]!.imageUrl;
+  }
+  return copy;
+}
+
+export function memBulkSetProductsActive(
+  ownerId: number,
+  productIds: number[],
+  active: boolean
+) {
+  let updated = 0;
+  for (const id of productIds) {
+    const p = store.products.find((x) => x.id === id);
+    if (!p) throw new Error("One or more products were not found");
+    memGetStoreForOwner(p.storeId, ownerId);
+    p.active = active;
+    p.updatedAt = new Date();
+    updated++;
+  }
+  return { updated };
+}
+
+export function memBulkDeleteProducts(ownerId: number, productIds: number[]) {
+  let deleted = 0;
+  for (const id of productIds) {
+    const p = store.products.find((x) => x.id === id);
+    if (!p) throw new Error("One or more products were not found");
+    memGetStoreForOwner(p.storeId, ownerId);
+  }
+  for (const id of productIds) {
+    store.products = store.products.filter((x) => x.id !== id);
+    store.productImages = store.productImages.filter((i) => i.productId !== id);
+    deleted++;
+  }
+  return { deleted };
+}
+
 export function memListProducts(storeId: number, activeOnly = false) {
   return store.products.filter(
     (p) => p.storeId === storeId && (!activeOnly || p.active)

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatNgn, koboToNgnMajor } from "@/lib/money";
 import { SUGGESTED_CATEGORIES } from "@/lib/products/schema";
+import { classifyStock, LOW_STOCK_THRESHOLD } from "@/lib/inventory";
 
 type Product = {
   id: number;
@@ -54,6 +55,13 @@ export default function ProductsPage() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [search, setSearch] = useState("");
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [filterActive, setFilterActive] = useState<"all" | "active" | "inactive">("all");
+  const [filterFeatured, setFilterFeatured] = useState<"all" | "featured" | "not">("all");
+  const [filterStock, setFilterStock] = useState<"all" | "low" | "out">("all");
+  const [bulkWorking, setBulkWorking] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -78,6 +86,7 @@ export default function ProductsPage() {
           : null;
       setStoreId(sid);
       setProducts(Array.isArray(data.products) ? data.products : []);
+      setSelected(new Set());
       setError("");
     } catch {
       setError("Could not load products");
@@ -347,7 +356,127 @@ export default function ProductsPage() {
     await load();
   }
 
-  if (storeId === null && products.length === 0) {
+
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of products) {
+      if (p.category) set.add(p.category);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter((p) => {
+      if (q && !p.name.toLowerCase().includes(q)) return false;
+      if (filterCategory !== "all" && (p.category || "General") !== filterCategory)
+        return false;
+      if (filterActive === "active" && !p.active) return false;
+      if (filterActive === "inactive" && p.active) return false;
+      if (filterFeatured === "featured" && !p.featured) return false;
+      if (filterFeatured === "not" && p.featured) return false;
+      const stockClass = classifyStock(p.stock);
+      if (filterStock === "low" && stockClass !== "low") return false;
+      if (filterStock === "out" && stockClass !== "out") return false;
+      return true;
+    });
+  }, [products, search, filterCategory, filterActive, filterFeatured, filterStock]);
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllFiltered() {
+    setSelected(new Set(filtered.map((p) => p.id)));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function runBulk(action: "activate" | "deactivate" | "delete") {
+    const ids = Array.from(selected);
+    if (ids.length === 0 || bulkWorking) return;
+    if (action === "delete") {
+      const ok = confirm(
+        `Delete ${ids.length} product${ids.length === 1 ? "" : "s"}? This cannot be undone.`
+      );
+      if (!ok) return;
+    }
+    setBulkWorking(true);
+    setError("");
+    setSuccess("");
+    try {
+      const res = await fetch("/api/products/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ productIds: ids, action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Bulk action failed");
+      setSuccess(
+        action === "delete"
+          ? `Deleted ${data.deleted ?? ids.length} product(s)`
+          : `Updated ${data.updated ?? ids.length} product(s)`
+      );
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bulk action failed");
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function duplicate(productId: number) {
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      const res = await fetch("/api/products/duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ productId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Duplicate failed");
+      setSuccess(`Duplicated as "${data.product?.name || "copy"}"`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Duplicate failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function stockBadge(stock: number) {
+    const kind = classifyStock(stock);
+    if (kind === "out") {
+      return (
+        <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-red-700">
+          Out of stock
+        </span>
+      );
+    }
+    if (kind === "low") {
+      return (
+        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+          Low stock (≤{LOW_STOCK_THRESHOLD})
+        </span>
+      );
+    }
+    return null;
+  }
+
+    if (storeId === null && products.length === 0) {
     return (
       <p className="text-sm text-ink-500">
         Create a store first to manage products.
@@ -490,16 +619,149 @@ export default function ProductsPage() {
         </button>
       </form>
 
-      {products.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-ink-200 bg-white p-8 text-center">
-          <p className="font-medium text-ink-900">No products yet</p>
-          <p className="mt-1 text-sm text-ink-500">
-            Add your first product to start selling.
-          </p>
+            <div className="space-y-3 rounded-xl border border-ink-100 bg-white p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-ink-800">Your products</p>
+            <p className="text-xs text-ink-500">
+              {filtered.length} shown
+              {filtered.length !== products.length
+                ? ` of ${products.length}`
+                : ""}
+              {selected.size > 0 ? ` · ${selected.size} selected` : ""}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={selectAllFiltered}
+              disabled={filtered.length === 0}
+              className="rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-700 disabled:opacity-50"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              onClick={clearSelection}
+              disabled={selected.size === 0}
+              className="rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-700 disabled:opacity-50"
+            >
+              Clear
+            </button>
+          </div>
         </div>
+
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="block text-xs text-ink-600 sm:col-span-2 lg:col-span-1">
+            Search
+            <input
+              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              placeholder="Search by name…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <label className="block text-xs text-ink-600">
+            Category
+            <select
+              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+            >
+              <option value="all">All categories</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs text-ink-600">
+            Status
+            <select
+              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              value={filterActive}
+              onChange={(e) =>
+                setFilterActive(e.target.value as "all" | "active" | "inactive")
+              }
+            >
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </label>
+          <label className="block text-xs text-ink-600">
+            Featured
+            <select
+              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              value={filterFeatured}
+              onChange={(e) =>
+                setFilterFeatured(e.target.value as "all" | "featured" | "not")
+              }
+            >
+              <option value="all">All</option>
+              <option value="featured">Featured</option>
+              <option value="not">Not featured</option>
+            </select>
+          </label>
+          <label className="block text-xs text-ink-600">
+            Stock
+            <select
+              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              value={filterStock}
+              onChange={(e) =>
+                setFilterStock(e.target.value as "all" | "low" | "out")
+              }
+            >
+              <option value="all">All stock levels</option>
+              <option value="low">Low stock (≤{LOW_STOCK_THRESHOLD})</option>
+              <option value="out">Out of stock</option>
+            </select>
+          </label>
+        </div>
+
+        {selected.size > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-100 bg-brand-50/60 px-3 py-2">
+            <span className="text-xs font-medium text-ink-800">
+              {selected.size} selected
+            </span>
+            <button
+              type="button"
+              disabled={bulkWorking}
+              onClick={() => void runBulk("activate")}
+              className="rounded-md bg-brand-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
+            >
+              Activate
+            </button>
+            <button
+              type="button"
+              disabled={bulkWorking}
+              onClick={() => void runBulk("deactivate")}
+              className="rounded-md border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-700 disabled:opacity-60"
+            >
+              Deactivate
+            </button>
+            <button
+              type="button"
+              disabled={bulkWorking}
+              onClick={() => void runBulk("delete")}
+              className="rounded-md border border-red-200 bg-white px-2.5 py-1 text-xs text-red-600 disabled:opacity-60"
+            >
+              Delete
+            </button>
+          </div>
+        ) : null}
+
+      {filtered.length === 0 ? (
+        <p className="text-sm text-ink-500">
+          {products.length === 0
+            ? "No products yet. Add your first product above."
+            : "No products match your filters."}
+        </p>
       ) : (
         <ul className="space-y-3">
-          {products.map((p) => (
+          {filtered.map((p) => (
+
             <li
               key={p.id}
               className="rounded-xl border border-ink-100 bg-white p-4"
@@ -519,16 +781,28 @@ export default function ProductsPage() {
                     </div>
                   )}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-ink-900">{p.name}</p>
-                  <p className="text-xs text-ink-500">
-                    {p.category || "General"}
-                  </p>
-                  <p className="mt-1 text-sm text-ink-600">
-                    {formatNgn(p.priceKobo)} · Stock {p.stock} ·{" "}
-                    {p.active ? "Active" : "Inactive"}
-                    {p.featured ? " · Featured" : ""}
-                  </p>
+                <div className="flex min-w-0 flex-1 items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 rounded border-ink-300"
+                    checked={selected.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    aria-label={`Select ${p.name}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-ink-900">{p.name}</p>
+                      {stockBadge(p.stock)}
+                    </div>
+                    <p className="text-xs text-ink-500">
+                      {p.category || "General"}
+                    </p>
+                    <p className="mt-1 text-sm text-ink-600">
+                      {formatNgn(p.priceKobo)} · Stock {p.stock} ·{" "}
+                      {p.active ? "Active" : "Inactive"}
+                      {p.featured ? " · Featured" : ""}
+                    </p>
+                  </div>
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
@@ -538,6 +812,14 @@ export default function ProductsPage() {
                   className="rounded-md border border-ink-200 px-2.5 py-1 text-xs font-medium text-ink-700"
                 >
                   Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void duplicate(p.id)}
+                  disabled={saving}
+                  className="rounded-md border border-ink-200 px-2.5 py-1 text-xs text-ink-600 disabled:opacity-60"
+                >
+                  Duplicate
                 </button>
                 <button
                   type="button"
@@ -745,6 +1027,7 @@ export default function ProductsPage() {
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }
