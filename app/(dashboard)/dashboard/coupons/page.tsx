@@ -40,6 +40,7 @@ export default function CouponsPage() {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [form, setForm] = useState(blank());
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -94,44 +95,106 @@ export default function CouponsPage() {
     });
   }, [coupons, search, filter]);
 
-  async function createCoupon(e: React.FormEvent) {
+  function toLocalInput(iso: string | null | undefined): string {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function startEdit(c: Coupon) {
+    setEditingId(c.id);
+    setError("");
+    setSuccess("");
+    const valueDisplay =
+      c.type === "fixed"
+        ? String(Math.round(c.value / 100))
+        : String(c.value);
+    setForm({
+      code: c.code,
+      type: c.type === "fixed" ? "fixed" : "percentage",
+      value: valueDisplay,
+      minimumOrderAmountNgn: String(Math.round((c.minimumOrderAmount || 0) / 100)),
+      maximumDiscountAmountNgn:
+        c.maximumDiscountAmount == null
+          ? ""
+          : String(Math.round(c.maximumDiscountAmount / 100)),
+      startsAt: toLocalInput(c.startsAt),
+      expiresAt: toLocalInput(c.expiresAt),
+      usageLimit: c.usageLimit == null ? "" : String(c.usageLimit),
+      perCustomerLimit:
+        c.perCustomerLimit == null ? "" : String(c.perCustomerLimit),
+      active: c.active,
+      productIds: Array.isArray(c.productIds) ? [...c.productIds] : [],
+    });
+    // Scroll form into view
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(blank());
+    setError("");
+    setSuccess("");
+  }
+
+
+  async function saveCoupon(e: React.FormEvent) {
     e.preventDefault();
     if (!storeId || saving) return;
     setSaving(true);
     setError("");
     setSuccess("");
+    const payload = {
+      code: form.code,
+      type: form.type,
+      value: Number(form.value),
+      minimumOrderAmountNgn: Number(form.minimumOrderAmountNgn) || 0,
+      maximumDiscountAmountNgn:
+        form.maximumDiscountAmountNgn === ""
+          ? null
+          : Number(form.maximumDiscountAmountNgn),
+      startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
+      expiresAt: form.expiresAt
+        ? new Date(form.expiresAt).toISOString()
+        : null,
+      usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
+      perCustomerLimit: form.perCustomerLimit
+        ? Number(form.perCustomerLimit)
+        : null,
+      active: form.active,
+      productIds: form.productIds,
+    };
     try {
-      const res = await fetch("/api/coupons", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          storeId,
-          code: form.code,
-          type: form.type,
-          value: Number(form.value),
-          minimumOrderAmountNgn: Number(form.minimumOrderAmountNgn) || 0,
-          maximumDiscountAmountNgn:
-            form.maximumDiscountAmountNgn === ""
-              ? null
-              : Number(form.maximumDiscountAmountNgn),
-          startsAt: form.startsAt
-            ? new Date(form.startsAt).toISOString()
-            : null,
-          expiresAt: form.expiresAt
-            ? new Date(form.expiresAt).toISOString()
-            : null,
-          usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
-          perCustomerLimit: form.perCustomerLimit
-            ? Number(form.perCustomerLimit)
-            : null,
-          active: form.active,
-          productIds: form.productIds,
-        }),
-      });
+      const res =
+        editingId != null
+          ? await fetch("/api/coupons", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ couponId: editingId, ...payload }),
+            })
+          : await fetch("/api/coupons", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ storeId, ...payload }),
+            });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Create failed");
-      setSuccess(`Coupon ${data.coupon?.code || ""} created`);
+      if (!res.ok) {
+        throw new Error(
+          data.error || (editingId != null ? "Update failed" : "Create failed")
+        );
+      }
+      setSuccess(
+        editingId != null
+          ? `Coupon ${data.coupon?.code || ""} updated`
+          : `Coupon ${data.coupon?.code || ""} created`
+      );
+      setEditingId(null);
       setForm(blank());
       await load();
     } catch (err) {
@@ -209,10 +272,12 @@ export default function CouponsPage() {
       )}
 
       <form
-        onSubmit={createCoupon}
+        onSubmit={saveCoupon}
         className="space-y-3 rounded-xl border border-ink-100 bg-white p-4"
       >
-        <p className="text-sm font-medium text-ink-800">Create coupon</p>
+        <p className="text-sm font-medium text-ink-800">
+          {editingId != null ? "Edit coupon" : "Create coupon"}
+        </p>
         <div className="grid gap-2 sm:grid-cols-2">
           <label className="block text-sm">
             Code
@@ -353,13 +418,29 @@ export default function CouponsPage() {
             )}
           </div>
         </div>
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-        >
-          {saving ? "Saving…" : "Create coupon"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {saving
+              ? "Saving…"
+              : editingId != null
+                ? "Save changes"
+                : "Create coupon"}
+          </button>
+          {editingId != null ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={cancelEdit}
+              className="rounded-lg border border-ink-200 px-4 py-2 text-sm text-ink-700 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
       </form>
 
       <div className="space-y-3 rounded-xl border border-ink-100 bg-white p-4">
@@ -420,6 +501,13 @@ export default function CouponsPage() {
                     </p>
                   </div>
                   <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(c)}
+                      className="rounded-md border border-ink-200 px-2 py-1 text-xs"
+                    >
+                      Edit
+                    </button>
                     <button
                       type="button"
                       onClick={() => void toggleActive(c)}

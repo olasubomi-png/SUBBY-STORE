@@ -19,6 +19,11 @@ import {
   normalizeCouponCode,
   type CouponType,
 } from "@/lib/coupons/math";
+import {
+  assertCouponValue,
+  assertCouponDates,
+  assertOptionalPositiveInt,
+} from "@/lib/coupons/validate";
 
 let store: MemoryStore = createMemoryStore();
 
@@ -997,17 +1002,52 @@ export function memUpdateCoupon(
   const row = store.coupons.find((c) => c.id === couponId);
   if (!row) throw new Error("Coupon not found");
   memGetStoreForOwner(row.storeId, ownerId);
-  if (patch.code !== undefined) row.code = normalizeCouponCode(patch.code);
-  if (patch.type !== undefined) row.type = patch.type;
-  if (patch.value !== undefined) row.value = patch.value;
+
+  const finalType = (patch.type ?? row.type) as CouponType;
+  let finalValue = row.value;
+  if (patch.value !== undefined) {
+    finalValue =
+      finalType === "fixed" ? ngnMajorToKobo(patch.value) : patch.value;
+  }
+  assertCouponValue(finalType, finalValue);
+
+  const finalStarts =
+    patch.startsAt !== undefined ? patch.startsAt : row.startsAt;
+  const finalExpires =
+    patch.expiresAt !== undefined ? patch.expiresAt : row.expiresAt;
+  assertCouponDates(finalStarts, finalExpires);
+
+  const finalUsage =
+    patch.usageLimit !== undefined ? patch.usageLimit : row.usageLimit;
+  const finalPerCustomer =
+    patch.perCustomerLimit !== undefined
+      ? patch.perCustomerLimit
+      : row.perCustomerLimit;
+  assertOptionalPositiveInt("usage limit", finalUsage);
+  assertOptionalPositiveInt("per-customer limit", finalPerCustomer);
+
+  if (patch.code !== undefined) {
+    const code = normalizeCouponCode(patch.code);
+    if (code.length < 2) throw new Error("Invalid coupon code");
+    row.code = code;
+  }
+  if (patch.type !== undefined) row.type = finalType;
+  if (patch.value !== undefined || patch.type !== undefined) {
+    row.value = finalValue;
+  }
   if (patch.minimumOrderAmountNgn !== undefined) {
-    row.minimumOrderAmount = ngnMajorToKobo(patch.minimumOrderAmountNgn);
+    const minK = ngnMajorToKobo(patch.minimumOrderAmountNgn);
+    if (minK < 0) throw new Error("Invalid minimum order amount");
+    row.minimumOrderAmount = minK;
   }
   if (patch.maximumDiscountAmountNgn !== undefined) {
     row.maximumDiscountAmount =
       patch.maximumDiscountAmountNgn == null
         ? null
         : ngnMajorToKobo(patch.maximumDiscountAmountNgn);
+    if (row.maximumDiscountAmount != null && row.maximumDiscountAmount < 0) {
+      throw new Error("Invalid maximum discount amount");
+    }
   }
   if (patch.startsAt !== undefined) row.startsAt = patch.startsAt;
   if (patch.expiresAt !== undefined) row.expiresAt = patch.expiresAt;
@@ -1018,8 +1058,8 @@ export function memUpdateCoupon(
   if (patch.active !== undefined) row.active = patch.active;
   if (patch.productIds !== undefined) {
     for (const pid of patch.productIds) {
-      const p = store.products.find((x) => x.id === pid);
-      if (!p || p.storeId !== row.storeId) {
+      const prod = store.products.find((x) => x.id === pid);
+      if (!prod || prod.storeId !== row.storeId) {
         throw new Error("One or more products are invalid for this store");
       }
     }

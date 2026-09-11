@@ -11,7 +11,12 @@ import {
   normalizeCouponCode,
   type CouponType,
 } from "@/lib/coupons/math";
-import { ngnMajorToKobo } from "@/lib/money";
+import {
+  assertCouponValue,
+  assertCouponDates,
+  assertOptionalPositiveInt,
+} from "@/lib/coupons/validate";
+import { ngnMajorToKobo, koboToNgnMajor } from "@/lib/money";
 import { stores } from "@/db/schema";
 
 function useMemory(): boolean {
@@ -55,18 +60,6 @@ export type CouponRow = {
   updatedAt: Date;
   productIds?: number[];
 };
-
-function assertCouponValue(type: string, value: number) {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error("Invalid discount value");
-  }
-  if (type === "percentage" && (value < 1 || value > 100)) {
-    throw new Error("Percentage must be between 1 and 100");
-  }
-  if (type !== "percentage" && type !== "fixed") {
-    throw new Error("Invalid coupon type");
-  }
-}
 
 export async function listCouponsForOwner(ownerId: number, storeId: number) {
   await assertStoreOwned(storeId, ownerId);
@@ -118,15 +111,25 @@ export async function createCoupon(
   await assertStoreOwned(input.storeId, ownerId);
   const code = normalizeCouponCode(input.code);
   if (code.length < 2) throw new Error("Invalid coupon code");
-  assertCouponValue(input.type, input.value);
+  assertCouponValue(
+    input.type,
+    input.type === "fixed" ? ngnMajorToKobo(input.value) : input.value
+  );
+  assertCouponDates(input.startsAt ?? null, input.expiresAt ?? null);
+  assertOptionalPositiveInt("usage limit", input.usageLimit ?? null);
+  assertOptionalPositiveInt("per-customer limit", input.perCustomerLimit ?? null);
   // Fixed coupons: API value is NGN major units → store as kobo
   const storedValue =
     input.type === "fixed" ? ngnMajorToKobo(input.value) : input.value;
   const minKobo = ngnMajorToKobo(input.minimumOrderAmountNgn ?? 0);
+  if (minKobo < 0) throw new Error("Invalid minimum order amount");
   const maxKobo =
     input.maximumDiscountAmountNgn == null
       ? null
       : ngnMajorToKobo(input.maximumDiscountAmountNgn);
+  if (maxKobo != null && maxKobo < 0) {
+    throw new Error("Invalid maximum discount amount");
+  }
 
   if (useMemory()) {
     return mem.memCreateCoupon(ownerId, {
@@ -217,14 +220,54 @@ export async function updateCoupon(
     if (!row) throw new Error("Coupon not found");
     await assertStoreOwned(row.storeId, ownerId);
 
+    // Final resulting state (authoritative validation)
+    const finalType = (patch.type ?? row.type) as CouponType;
+    let finalValue = row.value;
+    if (patch.value !== undefined) {
+      finalValue =
+        finalType === "fixed" ? ngnMajorToKobo(patch.value) : patch.value;
+    } else if (patch.type !== undefined && patch.type !== row.type) {
+      // Type changed without new value — validate existing stored value as new type
+      finalValue = row.value;
+    }
+    assertCouponValue(finalType, finalValue);
+
+    const finalStarts =
+      patch.startsAt !== undefined ? patch.startsAt : row.startsAt;
+    const finalExpires =
+      patch.expiresAt !== undefined ? patch.expiresAt : row.expiresAt;
+    assertCouponDates(finalStarts, finalExpires);
+
+    const finalUsage =
+      patch.usageLimit !== undefined ? patch.usageLimit : row.usageLimit;
+    const finalPerCustomer =
+      patch.perCustomerLimit !== undefined
+        ? patch.perCustomerLimit
+        : row.perCustomerLimit;
+    assertOptionalPositiveInt("usage limit", finalUsage);
+    assertOptionalPositiveInt("per-customer limit", finalPerCustomer);
+
+    if (patch.minimumOrderAmountNgn !== undefined) {
+      const minK = ngnMajorToKobo(patch.minimumOrderAmountNgn);
+      if (minK < 0) throw new Error("Invalid minimum order amount");
+    }
+    if (
+      patch.maximumDiscountAmountNgn !== undefined &&
+      patch.maximumDiscountAmountNgn != null
+    ) {
+      const maxK = ngnMajorToKobo(patch.maximumDiscountAmountNgn);
+      if (maxK < 0) throw new Error("Invalid maximum discount amount");
+    }
+
     const values: Record<string, unknown> = { updatedAt: new Date() };
     if (patch.code !== undefined) {
-      values.code = normalizeCouponCode(patch.code);
+      const code = normalizeCouponCode(patch.code);
+      if (code.length < 2) throw new Error("Invalid coupon code");
+      values.code = code;
     }
-    if (patch.type !== undefined) values.type = patch.type;
-    if (patch.value !== undefined) {
-      assertCouponValue(patch.type ?? row.type, patch.value);
-      values.value = patch.value;
+    if (patch.type !== undefined) values.type = finalType;
+    if (patch.value !== undefined || patch.type !== undefined) {
+      values.value = finalValue;
     }
     if (patch.minimumOrderAmountNgn !== undefined) {
       values.minimumOrderAmount = ngnMajorToKobo(patch.minimumOrderAmountNgn);
