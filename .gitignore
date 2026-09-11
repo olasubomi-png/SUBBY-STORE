@@ -12,3 +12,5 @@ db/migrations/meta
 .vercel
 .env*
 logs/
+tsconfig.tsbuildinfo
+next-env.d.ts
