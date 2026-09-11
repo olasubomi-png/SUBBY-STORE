@@ -12,8 +12,13 @@ import {
 } from "@/lib/server/reservations";
 import { hashPassword, verifyPassword } from "@/lib/server/password";
 import { slugify, isValidSlug } from "@/lib/slug";
-import { assertPositiveKobo } from "@/lib/money";
+import { assertPositiveKobo, ngnMajorToKobo } from "@/lib/money";
 import { computeSellerAnalyticsFromData } from "@/lib/analytics-math";
+import {
+  computeDiscount,
+  normalizeCouponCode,
+  type CouponType,
+} from "@/lib/coupons/math";
 
 let store: MemoryStore = createMemoryStore();
 
@@ -265,8 +270,28 @@ function memCreatePendingOrderUnlocked(input: {
   note?: string;
   items: CartItemInput[];
   paymentReference: string;
+  couponCode?: string;
 }) {
   const cart = memPriceCart(input.storeId, input.items);
+  let discountKobo = 0;
+  let couponCode: string | null = null;
+  let totalKobo = cart.totalKobo;
+  if (input.couponCode) {
+    const applied = memValidateCouponForCart({
+      storeId: input.storeId,
+      code: input.couponCode,
+      lines: cart.lines.map((l) => ({
+        productId: l.productId,
+        lineTotalKobo: l.lineTotalKobo,
+      })),
+      customerEmail: input.customerEmail,
+      reserveUsage: true,
+    });
+    if (!applied.ok) throw new Error(applied.error);
+    discountKobo = applied.discountKobo;
+    couponCode = applied.code;
+    totalKobo = applied.totalKobo;
+  }
   const order = {
     id: store.seq.order++,
     storeId: input.storeId,
@@ -276,7 +301,9 @@ function memCreatePendingOrderUnlocked(input: {
     deliveryAddress: input.deliveryAddress.trim(),
     note: input.note?.trim() || "",
     subtotalKobo: cart.subtotalKobo,
-    totalKobo: cart.totalKobo,
+    discountKobo,
+    couponCode,
+    totalKobo,
     currency: "NGN",
     paymentStatus: "pending",
     orderStatus: "pending",
@@ -285,6 +312,7 @@ function memCreatePendingOrderUnlocked(input: {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+  cart.totalKobo = totalKobo;
   // Reserve stock (decrement available)
   for (const line of cart.lines) {
     const product = store.products.find((p) => p.id === line.productId);
@@ -531,6 +559,9 @@ export function memMarkOrderPaymentFailed(reference: string, reason?: string) {
   }
   if (order.paymentStatus === "failed") {
     return order;
+  }
+  if (order.couponCode) {
+    memReleaseCouponUsage(order.storeId, order.couponCode);
   }
   if (order.stockReserved) {
     const items = store.orderItems.filter((i) => i.orderId === order.id);
@@ -871,4 +902,256 @@ export function memEnsureLegacyGalleryImage(productId: number) {
     sortOrder: 0,
     createdAt: new Date(),
   });
+}
+
+/* ---- Coupons (memory) ---- */
+
+export function memListCoupons(storeId: number) {
+  return store.coupons
+    .filter((c) => c.storeId === storeId)
+    .map((c) => ({
+      ...c,
+      productIds: store.couponProducts
+        .filter((l) => l.couponId === c.id)
+        .map((l) => l.productId),
+    }))
+    .sort((a, b) => b.id - a.id);
+}
+
+export function memCreateCoupon(
+  ownerId: number,
+  input: {
+    storeId: number;
+    code: string;
+    type: string;
+    value: number;
+    minimumOrderAmount: number;
+    maximumDiscountAmount: number | null;
+    startsAt: Date | null;
+    expiresAt: Date | null;
+    usageLimit: number | null;
+    perCustomerLimit: number | null;
+    active: boolean;
+    productIds: number[];
+  }
+) {
+  memGetStoreForOwner(input.storeId, ownerId);
+  if (
+    store.coupons.some(
+      (c) => c.storeId === input.storeId && c.code === input.code
+    )
+  ) {
+    throw new Error("Coupon code already exists");
+  }
+  for (const pid of input.productIds) {
+    const p = store.products.find((x) => x.id === pid);
+    if (!p || p.storeId !== input.storeId) {
+      throw new Error("One or more products are invalid for this store");
+    }
+  }
+  const row = {
+    id: store.seq.coupon++,
+    storeId: input.storeId,
+    code: input.code,
+    type: input.type,
+    value: input.value,
+    minimumOrderAmount: input.minimumOrderAmount,
+    maximumDiscountAmount: input.maximumDiscountAmount,
+    startsAt: input.startsAt,
+    expiresAt: input.expiresAt,
+    usageLimit: input.usageLimit,
+    usageCount: 0,
+    perCustomerLimit: input.perCustomerLimit,
+    active: input.active,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  store.coupons.push(row);
+  for (const productId of input.productIds) {
+    store.couponProducts.push({
+      id: store.seq.couponProduct++,
+      couponId: row.id,
+      productId,
+    });
+  }
+  return { ...row, productIds: input.productIds };
+}
+
+export function memUpdateCoupon(
+  ownerId: number,
+  couponId: number,
+  patch: Partial<{
+    code: string;
+    type: CouponType;
+    value: number;
+    minimumOrderAmountNgn: number;
+    maximumDiscountAmountNgn: number | null;
+    startsAt: Date | null;
+    expiresAt: Date | null;
+    usageLimit: number | null;
+    perCustomerLimit: number | null;
+    active: boolean;
+    productIds: number[];
+  }>
+) {
+  const row = store.coupons.find((c) => c.id === couponId);
+  if (!row) throw new Error("Coupon not found");
+  memGetStoreForOwner(row.storeId, ownerId);
+  if (patch.code !== undefined) row.code = normalizeCouponCode(patch.code);
+  if (patch.type !== undefined) row.type = patch.type;
+  if (patch.value !== undefined) row.value = patch.value;
+  if (patch.minimumOrderAmountNgn !== undefined) {
+    row.minimumOrderAmount = ngnMajorToKobo(patch.minimumOrderAmountNgn);
+  }
+  if (patch.maximumDiscountAmountNgn !== undefined) {
+    row.maximumDiscountAmount =
+      patch.maximumDiscountAmountNgn == null
+        ? null
+        : ngnMajorToKobo(patch.maximumDiscountAmountNgn);
+  }
+  if (patch.startsAt !== undefined) row.startsAt = patch.startsAt;
+  if (patch.expiresAt !== undefined) row.expiresAt = patch.expiresAt;
+  if (patch.usageLimit !== undefined) row.usageLimit = patch.usageLimit;
+  if (patch.perCustomerLimit !== undefined) {
+    row.perCustomerLimit = patch.perCustomerLimit;
+  }
+  if (patch.active !== undefined) row.active = patch.active;
+  if (patch.productIds !== undefined) {
+    for (const pid of patch.productIds) {
+      const p = store.products.find((x) => x.id === pid);
+      if (!p || p.storeId !== row.storeId) {
+        throw new Error("One or more products are invalid for this store");
+      }
+    }
+    store.couponProducts = store.couponProducts.filter(
+      (l) => l.couponId !== couponId
+    );
+    for (const productId of patch.productIds) {
+      store.couponProducts.push({
+        id: store.seq.couponProduct++,
+        couponId,
+        productId,
+      });
+    }
+  }
+  row.updatedAt = new Date();
+  return {
+    ...row,
+    productIds: store.couponProducts
+      .filter((l) => l.couponId === couponId)
+      .map((l) => l.productId),
+  };
+}
+
+export function memDeleteCoupon(ownerId: number, couponId: number) {
+  const row = store.coupons.find((c) => c.id === couponId);
+  if (!row) throw new Error("Coupon not found");
+  memGetStoreForOwner(row.storeId, ownerId);
+  store.coupons = store.coupons.filter((c) => c.id !== couponId);
+  store.couponProducts = store.couponProducts.filter(
+    (l) => l.couponId !== couponId
+  );
+  return { deleted: true };
+}
+
+export function memValidateCouponForCart(input: {
+  storeId: number;
+  code: string;
+  lines: Array<{ productId: number; lineTotalKobo: number }>;
+  customerEmail?: string;
+  reserveUsage?: boolean;
+}) {
+  const code = normalizeCouponCode(input.code);
+  const coupon = store.coupons.find(
+    (c) => c.storeId === input.storeId && c.code === code
+  );
+  if (!coupon) return { ok: false as const, error: "Invalid coupon code" };
+  if (!coupon.active) return { ok: false as const, error: "Coupon is inactive" };
+  const now = new Date();
+  if (coupon.startsAt && now < coupon.startsAt) {
+    return { ok: false as const, error: "Coupon is not active yet" };
+  }
+  if (coupon.expiresAt && now > coupon.expiresAt) {
+    return { ok: false as const, error: "Coupon has expired" };
+  }
+  if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
+    return { ok: false as const, error: "Coupon usage limit reached" };
+  }
+  const subtotalKobo = input.lines.reduce((s, l) => s + l.lineTotalKobo, 0);
+  if (coupon.perCustomerLimit != null && input.customerEmail) {
+    const email = input.customerEmail.toLowerCase().trim();
+    const used = store.orders.filter(
+      (o) =>
+        o.storeId === input.storeId &&
+        o.couponCode === code &&
+        o.customerEmail === email &&
+        o.paymentStatus !== "failed"
+    );
+    if (used.length >= coupon.perCustomerLimit) {
+      return {
+        ok: false as const,
+        error: "Coupon per-customer limit reached",
+      };
+    }
+  }
+  const restricted = store.couponProducts
+    .filter((l) => l.couponId === coupon.id)
+    .map((l) => l.productId);
+  const eligibleLines =
+    restricted.length === 0
+      ? input.lines
+      : input.lines.filter((l) => restricted.includes(l.productId));
+  const eligibleSubtotal = eligibleLines.reduce(
+    (s, l) => s + l.lineTotalKobo,
+    0
+  );
+  if (restricted.length > 0 && eligibleSubtotal <= 0) {
+    return {
+      ok: false as const,
+      error: "Coupon does not apply to items in your cart",
+    };
+  }
+  if (coupon.minimumOrderAmount > 0 && subtotalKobo < coupon.minimumOrderAmount) {
+    return {
+      ok: false as const,
+      error: "Order does not meet the minimum amount for this coupon",
+    };
+  }
+  const { discountKobo, totalKobo } = computeDiscount({
+    type: coupon.type as CouponType,
+    value: coupon.value,
+    eligibleSubtotalKobo: eligibleSubtotal,
+    cartSubtotalKobo: subtotalKobo,
+    minimumOrderAmountKobo: coupon.minimumOrderAmount,
+    maximumDiscountAmountKobo: coupon.maximumDiscountAmount,
+  });
+  if (discountKobo <= 0) {
+    return { ok: false as const, error: "Coupon does not reduce this order" };
+  }
+  if (input.reserveUsage) {
+    if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
+      return { ok: false as const, error: "Coupon usage limit reached" };
+    }
+    coupon.usageCount += 1;
+    coupon.updatedAt = new Date();
+  }
+  return {
+    ok: true as const,
+    code: coupon.code,
+    type: coupon.type,
+    discountKobo,
+    subtotalKobo,
+    totalKobo,
+    message: "Coupon applied",
+  };
+}
+
+export function memReleaseCouponUsage(storeId: number, code: string) {
+  const coupon = store.coupons.find(
+    (c) => c.storeId === storeId && c.code === code
+  );
+  if (coupon && coupon.usageCount > 0) {
+    coupon.usageCount -= 1;
+    coupon.updatedAt = new Date();
+  }
 }

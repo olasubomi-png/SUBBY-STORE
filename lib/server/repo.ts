@@ -24,6 +24,10 @@ import {
   isReservationExpired,
 } from "@/lib/server/reservations";
 import { allowMemoryDb, isProduction, requireDatabaseUrl } from "@/lib/server/config";
+import {
+  validateCouponForCart,
+  releaseCouponUsage,
+} from "@/lib/server/coupons";
 
 export function useMemory(): boolean {
   if (isProduction()) {
@@ -652,6 +656,7 @@ export async function createPendingOrder(input: {
   note?: string;
   items: CartItemInput[];
   paymentReference: string;
+  couponCode?: string;
 }) {
   if (useMemory()) return await mem.memCreatePendingOrder(input);
 
@@ -713,10 +718,30 @@ export async function createPendingOrder(input: {
     }
 
     const subtotalKobo = sumKobo(lines.map((l) => l.lineTotalKobo));
+    let discountKobo = 0;
+    let couponCode: string | null = null;
+    let totalKobo = subtotalKobo;
+    if (input.couponCode) {
+      const applied = await validateCouponForCart({
+        storeId: input.storeId,
+        code: input.couponCode,
+        lines: lines.map((l) => ({
+          productId: l.productId,
+          lineTotalKobo: l.lineTotalKobo,
+        })),
+        customerEmail: input.customerEmail,
+        reserveUsage: true,
+      });
+      if (!applied.ok) throw new Error(applied.error);
+      discountKobo = applied.discountKobo;
+      couponCode = applied.code;
+      totalKobo = applied.totalKobo;
+    }
     const cart = {
       lines,
       subtotalKobo,
-      totalKobo: subtotalKobo,
+      discountKobo,
+      totalKobo,
       currency: "NGN" as const,
     };
 
@@ -751,6 +776,8 @@ export async function createPendingOrder(input: {
         deliveryAddress: input.deliveryAddress.trim(),
         note: input.note?.trim() || "",
         subtotalKobo: cart.subtotalKobo,
+        discountKobo: cart.discountKobo ?? 0,
+        couponCode: couponCode,
         totalKobo: cart.totalKobo,
         currency: "NGN",
         paymentStatus: "pending",
@@ -1286,6 +1313,10 @@ export async function markOrderPaymentFailed(reference: string) {
     }
     if (order.paymentStatus === "failed") {
       return { ...order, paymentStatus: "failed" as const };
+    }
+
+    if (order.couponCode) {
+      await releaseCouponUsage(order.storeId, order.couponCode);
     }
 
     // Release reservation once if still active

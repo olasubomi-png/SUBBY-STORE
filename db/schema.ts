@@ -95,6 +95,10 @@ export const orders = pgTable(
     note: text("note").default("").notNull(),
     /** Subtotal and total in kobo */
     subtotalKobo: integer("subtotal_kobo").notNull(),
+    /** Discount applied at checkout (kobo snapshot) */
+    discountKobo: integer("discount_kobo").default(0).notNull(),
+    /** Coupon code snapshot (uppercase); null if none */
+    couponCode: varchar("coupon_code", { length: 40 }),
     totalKobo: integer("total_kobo").notNull(),
     currency: varchar("currency", { length: 3 }).default("NGN").notNull(),
     paymentStatus: varchar("payment_status", { length: 20 }).default("pending").notNull(),
@@ -184,3 +188,58 @@ export type Product = typeof products.$inferSelect;
 export type ProductImage = typeof productImages.$inferSelect;
 export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
+
+/** Discount coupons scoped to a store. Codes are stored uppercase. */
+export const coupons = pgTable(
+  "coupons",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 40 }).notNull(),
+    /** percentage | fixed */
+    type: varchar("type", { length: 20 }).notNull(),
+    /**
+     * percentage: whole percent 1–100
+     * fixed: discount in kobo
+     */
+    value: integer("value").notNull(),
+    /** Minimum eligible subtotal in kobo; 0 = none */
+    minimumOrderAmount: integer("minimum_order_amount").default(0).notNull(),
+    /** Cap for percentage discounts in kobo; null = no cap */
+    maximumDiscountAmount: integer("maximum_discount_amount"),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    /** null = unlimited */
+    usageLimit: integer("usage_limit"),
+    usageCount: integer("usage_count").default(0).notNull(),
+    /** null = unlimited per customer email */
+    perCustomerLimit: integer("per_customer_limit"),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("coupons_store_code_uidx").on(t.storeId, t.code),
+    index("coupons_store_idx").on(t.storeId),
+  ]
+);
+
+export const couponProducts = pgTable(
+  "coupon_products",
+  {
+    id: serial("id").primaryKey(),
+    couponId: integer("coupon_id")
+      .notNull()
+      .references(() => coupons.id, { onDelete: "cascade" }),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    uniqueIndex("coupon_products_uidx").on(t.couponId, t.productId),
+    index("coupon_products_coupon_idx").on(t.couponId),
+    index("coupon_products_product_idx").on(t.productId),
+  ]
+);

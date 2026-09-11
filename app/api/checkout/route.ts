@@ -20,6 +20,7 @@ const checkoutSchema = z.object({
   customerEmail: z.string().email().max(255),
   deliveryAddress: z.string().min(5).max(500),
   note: z.string().max(1000).optional(),
+  couponCode: z.string().max(40).optional(),
   items: cartSchema.shape.items,
 });
 
@@ -62,6 +63,7 @@ export async function POST(req: Request) {
       note: parsed.data.note,
       items: parsed.data.items,
       paymentReference: reference,
+      couponCode: parsed.data.couponCode,
     });
 
     /*

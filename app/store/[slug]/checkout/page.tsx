@@ -31,6 +31,14 @@ export default function CheckoutPage() {
   const [customerEmail, setCustomerEmail] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [note, setNote] = useState("");
+  const [couponInput, setCouponInput] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string;
+    discountKobo: number;
+    subtotalKobo: number;
+    totalKobo: number;
+  } | null>(null);
+  const [couponError, setCouponError] = useState("");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -106,6 +114,7 @@ export default function CheckoutPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          couponCode: appliedCoupon?.code,
           storeSlug: slug,
           customerName: customerName.trim(),
           customerPhone: customerPhone.trim(),
@@ -171,13 +180,96 @@ export default function CheckoutPage() {
             </li>
           ))}
         </ul>
-        <div className="mt-3 flex justify-between border-t border-ink-100 pt-3 text-sm font-semibold text-ink-950">
-          <span>Estimated total</span>
-          <span className="tabular-nums">{formatNgn(previewTotal)}</span>
+        <div className="mt-3 space-y-1 border-t border-ink-100 pt-3 text-sm">
+          <div className="flex justify-between text-ink-700">
+            <span>Subtotal</span>
+            <span className="tabular-nums">
+              {formatNgn(appliedCoupon?.subtotalKobo ?? previewTotal)}
+            </span>
+          </div>
+          {appliedCoupon ? (
+            <div className="flex justify-between text-brand-700">
+              <span>Discount ({appliedCoupon.code})</span>
+              <span className="tabular-nums">
+                −{formatNgn(appliedCoupon.discountKobo)}
+              </span>
+            </div>
+          ) : null}
+          <div className="flex justify-between font-semibold text-ink-950">
+            <span>Total</span>
+            <span className="tabular-nums">
+              {formatNgn(appliedCoupon?.totalKobo ?? previewTotal)}
+            </span>
+          </div>
         </div>
         <p className="mt-1 text-xs text-ink-400">
           Paystack amount is calculated server-side from current product prices.
         </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="min-w-0 flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm uppercase"
+            placeholder="Coupon code"
+            value={couponInput}
+            onChange={(e) => setCouponInput(e.target.value)}
+            disabled={!!appliedCoupon}
+          />
+          {appliedCoupon ? (
+            <button
+              type="button"
+              className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              onClick={() => {
+                setAppliedCoupon(null);
+                setCouponInput("");
+                setCouponError("");
+              }}
+            >
+              Remove
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rounded-lg bg-ink-900 px-3 py-2 text-sm font-medium text-white"
+              onClick={async () => {
+                setCouponError("");
+                try {
+                  const res = await fetch("/api/coupons/validate", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      storeSlug: slug,
+                      code: couponInput,
+                      items: items.map((i) => ({
+                        productId: i.productId,
+                        quantity: i.quantity,
+                      })),
+                      customerEmail: customerEmail || undefined,
+                    }),
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) throw new Error(data.error || "Invalid coupon");
+                  setAppliedCoupon({
+                    code: data.code,
+                    discountKobo: data.discountKobo,
+                    subtotalKobo: data.subtotalKobo,
+                    totalKobo: data.totalKobo,
+                  });
+                } catch (err) {
+                  setCouponError(
+                    err instanceof Error ? err.message : "Invalid coupon"
+                  );
+                }
+              }}
+            >
+              Apply
+            </button>
+          )}
+        </div>
+        {couponError ? (
+          <p className="mt-1 text-xs text-red-600">{couponError}</p>
+        ) : null}
+        {appliedCoupon ? (
+          <p className="mt-1 text-xs text-brand-700">✓ Coupon applied</p>
+        ) : null}
       </div>
 
       <form onSubmit={onSubmit} className="mt-6 space-y-3" noValidate>

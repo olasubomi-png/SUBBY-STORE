@@ -60,6 +60,8 @@ export type MemoryStore = {
     deliveryAddress: string;
     note: string;
     subtotalKobo: number;
+    discountKobo: number;
+    couponCode: string | null;
     totalKobo: number;
     currency: string;
     paymentStatus: string;
@@ -92,12 +94,36 @@ export type MemoryStore = {
     createdAt: Date;
     updatedAt: Date;
   }>;
+  coupons: Array<{
+    id: number;
+    storeId: number;
+    code: string;
+    type: string;
+    value: number;
+    minimumOrderAmount: number;
+    maximumDiscountAmount: number | null;
+    startsAt: Date | null;
+    expiresAt: Date | null;
+    usageLimit: number | null;
+    usageCount: number;
+    perCustomerLimit: number | null;
+    active: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  }>;
+  couponProducts: Array<{
+    id: number;
+    couponId: number;
+    productId: number;
+  }>;
   seq: {
     user: number;
     store: number;
     product: number;
     order: number;
     item: number;
+    coupon: number;
+    couponProduct: number;
     payment: number;
     productImage: number;
   };
@@ -112,6 +138,8 @@ export function createMemoryStore(): MemoryStore {
     orderItems: [],
     payments: [],
     productImages: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1 },
+    coupons: [],
+    couponProducts: [],
+    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1 },
   };
 }
