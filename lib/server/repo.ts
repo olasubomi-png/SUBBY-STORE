@@ -594,16 +594,25 @@ export async function bulkSetProductsActive(
 }
 
 /** Bulk delete products owned by seller. */
+/**
+ * Bulk-delete products owned by the seller.
+ * Collects managed image URLs (gallery + legacy primary) before DB delete so
+ * the API can best-effort remove Vercel Blob objects afterward.
+ */
 export async function bulkDeleteProducts(ownerId: number, productIds: number[]) {
   const ids = [...new Set(productIds.filter((id) => Number.isSafeInteger(id) && id > 0))];
-  if (ids.length === 0) return { deleted: 0 };
+  if (ids.length === 0) return { deleted: 0, imageUrls: [] as string[] };
   if (useMemory()) {
     return mem.memBulkDeleteProducts(ownerId, ids);
   }
   const db = getDb();
   return db.transaction(async (tx) => {
     const owned = await tx
-      .select({ id: products.id, storeId: products.storeId })
+      .select({
+        id: products.id,
+        storeId: products.storeId,
+        imageUrl: products.imageUrl,
+      })
       .from(products)
       .where(inArray(products.id, ids));
     if (owned.length !== ids.length) {
@@ -612,12 +621,25 @@ export async function bulkDeleteProducts(ownerId: number, productIds: number[]) 
     for (const p of owned) {
       await getStoreOwned(p.storeId, ownerId);
     }
-    // product_images cascade via FK; delete products
+
+    const gallery = await tx
+      .select({ imageUrl: productImages.imageUrl })
+      .from(productImages)
+      .where(inArray(productImages.productId, ids));
+
+    const urlSet = new Set<string>();
+    for (const g of gallery) {
+      if (g.imageUrl) urlSet.add(g.imageUrl);
+    }
+    for (const p of owned) {
+      if (p.imageUrl) urlSet.add(p.imageUrl);
+    }
+
     const deleted = await tx
       .delete(products)
       .where(inArray(products.id, ids))
       .returning({ id: products.id });
-    return { deleted: deleted.length };
+    return { deleted: deleted.length, imageUrls: [...urlSet] };
   });
 }
 

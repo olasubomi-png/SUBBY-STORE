@@ -223,18 +223,23 @@ export function memBulkSetProductsActive(
 }
 
 export function memBulkDeleteProducts(ownerId: number, productIds: number[]) {
-  let deleted = 0;
+  const urlSet = new Set<string>();
   for (const id of productIds) {
     const p = store.products.find((x) => x.id === id);
     if (!p) throw new Error("One or more products were not found");
     memGetStoreForOwner(p.storeId, ownerId);
+    if (p.imageUrl) urlSet.add(p.imageUrl);
+    for (const img of store.productImages) {
+      if (img.productId === id && img.imageUrl) urlSet.add(img.imageUrl);
+    }
   }
+  let deleted = 0;
   for (const id of productIds) {
     store.products = store.products.filter((x) => x.id !== id);
     store.productImages = store.productImages.filter((i) => i.productId !== id);
     deleted++;
   }
-  return { deleted };
+  return { deleted, imageUrls: [...urlSet] };
 }
 
 export function memListProducts(storeId: number, activeOnly = false) {

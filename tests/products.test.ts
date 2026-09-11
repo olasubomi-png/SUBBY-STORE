@@ -485,3 +485,79 @@ describe("product management 2.0", () => {
     expect(classifyStock(LOW_STOCK_THRESHOLD + 1)).toBe("in");
   });
 });
+
+describe("bulk delete blob cleanup and selection", () => {
+  beforeEach(() => {
+    resetMemoryStore();
+    process.env.USE_MEMORY_DB = "1";
+    (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
+  });
+  afterEach(async () => {
+    resetMemoryStore();
+    const { setBlobAdapters } = await import("@/lib/server/blob");
+    setBlobAdapters({ put: null, del: null });
+  });
+
+  it("bulkDeleteProducts returns gallery and primary image URLs", async () => {
+    const user = await memSignup({
+      email: `blob-${Math.random().toString(16).slice(2)}@ex.com`,
+      password: "password12",
+      fullName: "Seller",
+    });
+    const shop = memCreateStore({ ownerId: user.id, name: "Blob Shop" });
+    const primary =
+      "https://x.public.blob.vercel-storage.com/products/1/primary.jpg";
+    // use realistic path with user id
+    const uid = user.id;
+    const url1 = `https://x.public.blob.vercel-storage.com/products/${uid}/a.jpg`;
+    const url2 = `https://x.public.blob.vercel-storage.com/products/${uid}/b.jpg`;
+    const product = memCreateProduct({
+      ownerId: user.id,
+      storeId: shop.id,
+      name: "With Gallery",
+      priceKobo: 10000,
+      stock: 2,
+      imageUrl: url1,
+    });
+    const { memAddProductImage } = await import("@/lib/server/memory-repo");
+    memAddProductImage(user.id, product.id, url2);
+
+    const { bulkDeleteProducts } = await import("@/lib/server/repo");
+    const result = await bulkDeleteProducts(user.id, [product.id]);
+    expect(result.deleted).toBe(1);
+    expect(result.imageUrls.sort()).toEqual([url1, url2].sort());
+  });
+
+  it("bulk delete path best-effort deletes managed blobs for owner only", async () => {
+    const { setBlobAdapters, tryDeleteManagedBlob, blobBelongsToUser } =
+      await import("@/lib/server/blob");
+    const deleted: string[] = [];
+    setBlobAdapters({
+      del: async (url: string) => {
+        deleted.push(url);
+      },
+    });
+
+    const user = await memSignup({
+      email: `del-${Math.random().toString(16).slice(2)}@ex.com`,
+      password: "password12",
+      fullName: "Seller",
+    });
+    const uid = user.id;
+    const owned = `https://x.public.blob.vercel-storage.com/products/${uid}/ok.jpg`;
+    const foreign = `https://x.public.blob.vercel-storage.com/products/99999/no.jpg`;
+    expect(blobBelongsToUser(owned, uid)).toBe(true);
+    expect(blobBelongsToUser(foreign, uid)).toBe(false);
+
+    expect(await tryDeleteManagedBlob(owned, uid)).toBe(true);
+    expect(await tryDeleteManagedBlob(foreign, uid)).toBe(false);
+    expect(deleted).toEqual([owned]);
+  });
+
+  it("reconcileSelectedIds drops hidden selections", async () => {
+    const { reconcileSelectedIds } = await import("@/lib/products/selection");
+    expect(reconcileSelectedIds([1, 2, 3], [2, 3, 4])).toEqual([2, 3]);
+    expect(reconcileSelectedIds([1, 2], [1, 2])).toEqual([1, 2]);
+    expect(reconcileSelectedIds([9], [1, 2])).toEqual([]);
+  });
+});

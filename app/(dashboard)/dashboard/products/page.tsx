@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatNgn, koboToNgnMajor } from "@/lib/money";
 import { SUGGESTED_CATEGORIES } from "@/lib/products/schema";
 import { classifyStock, LOW_STOCK_THRESHOLD } from "@/lib/inventory";
+import { reconcileSelectedIds } from "@/lib/products/selection";
 
 type Product = {
   id: number;
@@ -381,6 +382,19 @@ export default function ProductsPage() {
       return true;
     });
   }, [products, search, filterCategory, filterActive, filterFeatured, filterStock]);
+
+  // Drop selections that are no longer visible under current filters
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const nextIds = reconcileSelectedIds(
+        prev,
+        filtered.map((p) => p.id)
+      );
+      if (nextIds.length === prev.size) return prev;
+      return new Set(nextIds);
+    });
+  }, [filtered]);
 
   function toggleSelect(id: number) {
     setSelected((prev) => {
