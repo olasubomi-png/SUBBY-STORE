@@ -1492,7 +1492,7 @@ export async function listProductImagesForProducts(productIds: number[]) {
   const rows = await db
     .select()
     .from(productImages)
-    .where(sql`${productImages.productId} in ${productIds}`)
+    .where(inArray(productImages.productId, productIds))
     .orderBy(asc(productImages.sortOrder), asc(productImages.id));
   const map = new Map<number, typeof rows>();
   for (const row of rows) {

@@ -5,25 +5,41 @@ import {
   createCoupon,
 } from "@/lib/server/coupons";
 import { createCouponSchema } from "@/lib/coupons/schema";
-import { listStoresForOwner } from "@/lib/server/repo";
+import {
+  parseOptionalStoreId,
+  resolveSellerStores,
+} from "@/lib/server/store-resolve";
 
 export async function GET(req: Request) {
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const storeId = Number(new URL(req.url).searchParams.get("storeId"));
-  try {
-    let sid = storeId;
-    if (!Number.isSafeInteger(sid) || sid <= 0) {
-      const stores = await listStoresForOwner(session.userId);
-      sid = stores[0]?.id;
-      if (!sid) {
-        return NextResponse.json({ coupons: [], storeId: null });
-      }
+  const preferred = parseOptionalStoreId(
+    new URL(req.url).searchParams.get("storeId")
+  );
+  const resolved = await resolveSellerStores(preferred);
+  if (!resolved.ok) {
+    if (resolved.status === 401) {
+      return NextResponse.json({ error: resolved.error }, { status: 401 });
     }
-    const coupons = await listCouponsForOwner(session.userId, sid);
-    return NextResponse.json({ coupons, storeId: sid });
+    if (preferred != null) {
+      return NextResponse.json({ error: resolved.error }, { status: 404 });
+    }
+    return NextResponse.json({
+      coupons: [],
+      storeId: null,
+      stores: [],
+      error: resolved.error,
+    });
+  }
+
+  try {
+    const coupons = await listCouponsForOwner(
+      resolved.session.userId,
+      resolved.primary.id
+    );
+    return NextResponse.json({
+      coupons,
+      storeId: resolved.primary.id,
+      stores: resolved.stores,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
     return NextResponse.json({ error: msg }, { status: 400 });

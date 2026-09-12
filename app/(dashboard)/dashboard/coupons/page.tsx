@@ -57,10 +57,17 @@ export default function CouponsPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to load");
-      setStoreId(data.storeId ?? null);
+      const rawSid = data.storeId;
+      const sid =
+        typeof rawSid === "number" && rawSid > 0
+          ? rawSid
+          : typeof rawSid === "string" && Number(rawSid) > 0
+            ? Number(rawSid)
+            : null;
+      setStoreId(sid);
       setCoupons(Array.isArray(data.coupons) ? data.coupons : []);
-      if (data.storeId) {
-        const pr = await fetch(`/api/products?storeId=${data.storeId}`, {
+      if (sid) {
+        const pr = await fetch(`/api/products?storeId=${sid}`, {
           credentials: "include",
         });
         const pd = await pr.json().catch(() => ({}));
@@ -249,6 +256,21 @@ export default function CouponsPage() {
       <div className="space-y-3">
         <div className="h-8 w-40 animate-pulse rounded-lg bg-ink-100" />
         <div className="h-32 animate-pulse rounded-xl bg-ink-100" />
+      </div>
+    );
+  }
+
+  if (error && !storeId) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-red-600">{error}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+        >
+          Try again
+        </button>
       </div>
     );
   }

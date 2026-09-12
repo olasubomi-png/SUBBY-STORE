@@ -7,9 +7,12 @@ import {
   deleteProduct,
   getStoreOwned,
   getProductOwned,
-  listStoresForOwner,
   listProductImagesForProducts,
 } from "@/lib/server/repo";
+import {
+  parseOptionalStoreId,
+  resolveSellerStores,
+} from "@/lib/server/store-resolve";
 import { ngnMajorToKobo } from "@/lib/money";
 import {
   createProductSchema,
@@ -35,43 +38,42 @@ function attachImages(
 }
 
 export async function GET(req: Request) {
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const preferred = parseOptionalStoreId(
+    new URL(req.url).searchParams.get("storeId")
+  );
+  const resolved = await resolveSellerStores(preferred);
+  if (!resolved.ok) {
+    if (resolved.status === 401) {
+      return NextResponse.json({ error: resolved.error }, { status: 401 });
+    }
+    if (preferred != null) {
+      return NextResponse.json({ error: resolved.error }, { status: 404 });
+    }
+    return NextResponse.json({
+      products: [],
+      storeId: null,
+      stores: [],
+      error: resolved.error,
+    });
   }
 
-  const rawStoreId = new URL(req.url).searchParams.get("storeId");
-  let storeId =
-    rawStoreId != null && rawStoreId !== ""
-      ? Number(rawStoreId)
-      : NaN;
-
   try {
-    // When storeId is omitted, resolve the seller's first store in one round-trip
-    // so the products UI does not waterfall /api/dashboard → /api/products.
-    if (!Number.isSafeInteger(storeId) || storeId <= 0) {
-      const stores = await listStoresForOwner(session.userId);
-      const first = stores[0];
-      if (!first) {
-        return NextResponse.json({ products: [], storeId: null, stores: [] });
-      }
-      storeId = first.id;
-      const products = await listProducts(storeId);
-      const imageMap = await listProductImagesForProducts(products.map((p) => p.id));
-      return NextResponse.json({
-        products: attachImages(products, imageMap),
-        storeId,
-        stores: stores.map((s) => ({ id: s.id, name: s.name, slug: s.slug })),
-      });
-    }
-
-    await getStoreOwned(storeId, session.userId);
+    const storeId = resolved.primary.id;
     const products = await listProducts(storeId);
-    const imageMap = await listProductImagesForProducts(products.map((p) => p.id));
-    return NextResponse.json({ products: attachImages(products, imageMap), storeId });
+    let imageMap = new Map<number, Array<{ imageUrl: string }>>();
+    try {
+      imageMap = await listProductImagesForProducts(products.map((p) => p.id));
+    } catch (imgErr) {
+      console.error("[products] image list failed", imgErr);
+    }
+    return NextResponse.json({
+      products: attachImages(products, imageMap),
+      storeId,
+      stores: resolved.stores,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
-    return NextResponse.json({ error: msg }, { status: 403 });
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
 }
 

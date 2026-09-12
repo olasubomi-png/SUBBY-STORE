@@ -81,10 +81,13 @@ export default function ProductsPage() {
         setProducts([]);
         return;
       }
+      const rawSid = data.storeId;
       const sid =
-        typeof data.storeId === "number" && data.storeId > 0
-          ? data.storeId
-          : null;
+        typeof rawSid === "number" && rawSid > 0
+          ? rawSid
+          : typeof rawSid === "string" && Number(rawSid) > 0
+            ? Number(rawSid)
+            : null;
       setStoreId(sid);
       setProducts(Array.isArray(data.products) ? data.products : []);
       setSelected(new Set());
@@ -490,14 +493,6 @@ export default function ProductsPage() {
     return null;
   }
 
-    if (storeId === null && products.length === 0) {
-    return (
-      <p className="text-sm text-ink-500">
-        Create a store first to manage products.
-      </p>
-    );
-  }
-
   if (loading) {
     return (
       <div className="space-y-4">
@@ -506,6 +501,29 @@ export default function ProductsPage() {
         <div className="h-24 animate-pulse rounded-xl bg-ink-100" />
         <div className="h-24 animate-pulse rounded-xl bg-ink-100" />
       </div>
+    );
+  }
+
+  if (error && storeId === null) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-red-600">{error}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (storeId === null) {
+    return (
+      <p className="text-sm text-ink-500">
+        Create a store first to manage products.
+      </p>
     );
   }
 
