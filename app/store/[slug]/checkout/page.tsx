@@ -11,6 +11,7 @@ import {
   writeCart,
   type CartLine,
 } from "@/lib/storefront/cart-client";
+import { trackStoreEvent } from "@/lib/storefront/events-client";
 
 type CatalogProduct = {
   id: number;
@@ -109,6 +110,7 @@ export default function CheckoutPage() {
       return;
     }
     setLoading(true);
+    void trackStoreEvent({ storeSlug: slug, eventType: "checkout_started" });
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",

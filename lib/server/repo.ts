@@ -1186,6 +1186,15 @@ export async function confirmPaidOrder(
   });
 }
 
+
+export async function listOrderItems(orderId: number) {
+  if (useMemory()) {
+    return mem.getMemoryStore().orderItems.filter((i) => i.orderId === orderId);
+  }
+  const db = getDb();
+  return db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+}
+
 export async function getOrderByReference(reference: string) {
   if (useMemory()) {
     return (

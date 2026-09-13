@@ -1195,3 +1195,34 @@ export function memReleaseCouponUsage(storeId: number, code: string) {
     coupon.updatedAt = new Date();
   }
 }
+
+export function memRecordStoreEvent(input: {
+  storeId: number;
+  productId?: number;
+  eventType: string;
+  visitorId?: string;
+  metadata?: string | null;
+}) {
+  store.storeEvents.push({
+    id: store.seq.storeEvent++,
+    storeId: input.storeId,
+    productId: input.productId ?? null,
+    eventType: input.eventType,
+    visitorId: input.visitorId || null,
+    metadata: input.metadata ?? null,
+    createdAt: new Date(),
+  });
+}
+
+export function memCountStoreEvents(
+  storeIds: number[],
+  eventType: string,
+  since: Date
+): number {
+  return store.storeEvents.filter(
+    (e) =>
+      storeIds.includes(e.storeId) &&
+      e.eventType === eventType &&
+      e.createdAt >= since
+  ).length;
+}

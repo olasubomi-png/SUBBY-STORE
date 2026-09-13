@@ -111,6 +111,15 @@ export type MemoryStore = {
     createdAt: Date;
     updatedAt: Date;
   }>;
+  storeEvents: Array<{
+    id: number;
+    storeId: number;
+    productId: number | null;
+    eventType: string;
+    visitorId: string | null;
+    metadata: string | null;
+    createdAt: Date;
+  }>;
   couponProducts: Array<{
     id: number;
     couponId: number;
@@ -126,6 +135,7 @@ export type MemoryStore = {
     couponProduct: number;
     payment: number;
     productImage: number;
+    storeEvent: number;
   };
 };
 
@@ -139,7 +149,8 @@ export function createMemoryStore(): MemoryStore {
     payments: [],
     productImages: [],
     coupons: [],
+    storeEvents: [],
     couponProducts: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1 },
+    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1, storeEvent: 1 },
   };
 }

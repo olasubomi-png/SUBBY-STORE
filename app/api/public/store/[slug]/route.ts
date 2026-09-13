@@ -1,9 +1,5 @@
 import { NextResponse } from "next/server";
-import {
-  getStoreBySlug,
-  listProducts,
-  releaseExpiredOrderReservations,
-} from "@/lib/server/repo";
+import { getStoreBySlug, listProducts } from "@/lib/server/repo";
 
 export async function GET(
   _req: Request,
@@ -12,39 +8,19 @@ export async function GET(
   const { slug } = await ctx.params;
   const store = await getStoreBySlug(slug);
   if (!store) {
-    return NextResponse.json({ error: "Store not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  // Best-effort: free expired reservations so public stock is closer to truth
-  try {
-    await releaseExpiredOrderReservations(10);
-  } catch {
-    /* ignore cleanup errors on public reads */
-  }
-  const products = await listProducts(store.id, true);
+  const products = (await listProducts(store.id, true)).map((p) => ({
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+    priceKobo: p.priceKobo,
+    stock: p.stock,
+    imageUrl: p.imageUrl,
+    active: true,
+  }));
   return NextResponse.json({
-    store: {
-      name: store.name,
-      slug: store.slug,
-      description: store.description,
-      logoUrl: store.logoUrl,
-      bannerUrl: store.bannerUrl,
-      phone: store.phone,
-      whatsapp: store.whatsapp,
-      email: store.email,
-      instagramUrl: store.instagramUrl,
-      facebookUrl: store.facebookUrl,
-      twitterUrl: store.twitterUrl,
-      tiktokUrl: store.tiktokUrl,
-    },
-    products: products.map((p) => ({
-      id: p.id,
-      name: p.name,
-      slug: p.slug,
-      priceKobo: p.priceKobo,
-      stock: p.stock,
-      imageUrl: p.imageUrl,
-      category: p.category,
-      active: true,
-    })),
+    store: { id: store.id, name: store.name, slug: store.slug },
+    products,
   });
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStoreBySlug, listProducts } from "@/lib/server/repo";
+import { listPublicStorePromotions } from "@/lib/server/public-promotions";
 import { Storefront } from "@/components/Storefront";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -8,9 +9,7 @@ type Props = { params: Promise<{ slug: string }> };
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
-  if (!store) {
-    return { title: "Store not found" };
-  }
+  if (!store) return { title: "Store not found" };
   const description =
     store.description?.trim() || `Shop ${store.name} on SUBBY-STORE`;
   return {
@@ -21,6 +20,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       description,
       ...(store.logoUrl ? { images: [{ url: store.logoUrl }] } : {}),
     },
+    twitter: { card: "summary", title: store.name, description },
   };
 }
 
@@ -28,8 +28,11 @@ export default async function PublicStorePage({ params }: Props) {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
   if (!store) notFound();
-  // activeOnly=true — never expose inactive products to the public storefront
-  const products = (await listProducts(store.id, true)).map((p) => ({
+  const [productRows, promotions] = await Promise.all([
+    listProducts(store.id, true),
+    listPublicStorePromotions(store.id),
+  ]);
+  const products = productRows.map((p) => ({
     id: p.id,
     name: p.name,
     slug: p.slug,
@@ -59,6 +62,7 @@ export default async function PublicStorePage({ params }: Props) {
         tiktokUrl: store.tiktokUrl,
       }}
       products={products}
+      promotions={promotions}
     />
   );
 }

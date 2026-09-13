@@ -71,6 +71,11 @@ export default async function OrderCompletePage({
           Payment {paymentStatus} · Order {orderStatus}
         </p>
       ) : null}
+      {sp.ref ? (
+        <p className="mt-4 text-xs text-ink-500">
+          Save your payment reference to track this order later.
+        </p>
+      ) : null}
       <Link href="/" className="mt-6 text-sm font-medium text-brand-700">
         Back to SUBBY STORE
       </Link>

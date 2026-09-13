@@ -13,6 +13,16 @@ import {
   type DiscoveryProduct,
   type SortOption,
 } from "@/lib/storefront/discovery";
+import {
+  readWishlist,
+  toggleWishlistId,
+} from "@/lib/storefront/wishlist-client";
+import { trackStoreEvent } from "@/lib/storefront/events-client";
+import { shareOrCopy } from "@/lib/storefront/share";
+import {
+  displayPriceWithPromotion,
+  type PublicPromotion,
+} from "@/lib/storefront/promotions-display";
 
 export type PublicProduct = DiscoveryProduct;
 
@@ -37,14 +47,18 @@ const SORT_OPTIONS: { value: SortOption; label: string }[] = [
 export function Storefront({
   store,
   products,
+  promotions = [],
 }: {
   store: PublicStore;
   products: PublicProduct[];
+  promotions?: PublicPromotion[];
 }) {
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [wishlist, setWishlist] = useState<number[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("All");
   const [sort, setSort] = useState<SortOption>("featured");
+  const [shareMsg, setShareMsg] = useState("");
 
   useEffect(() => {
     try {
@@ -53,6 +67,8 @@ export function Storefront({
     } catch {
       /* ignore */
     }
+    setWishlist(readWishlist(store.slug));
+    void trackStoreEvent({ storeSlug: store.slug, eventType: "store_view" });
   }, [store.slug]);
 
   useEffect(() => {
@@ -66,6 +82,11 @@ export function Storefront({
 
   const categories = useMemo(() => deriveCategories(products), [products]);
 
+  const featured = useMemo(
+    () => products.filter((p) => p.featured),
+    [products]
+  );
+
   const visible = useMemo(
     () =>
       discoverProducts(products, {
@@ -75,6 +96,10 @@ export function Storefront({
       }),
     [products, query, category, sort]
   );
+
+  function priceDisplay(p: DiscoveryProduct) {
+    return displayPriceWithPromotion(p.priceKobo, promotions);
+  }
 
   function add(productId: number) {
     setCart((prev) => {
@@ -88,104 +113,177 @@ export function Storefront({
       }
       return [...prev, { productId, quantity: 1 }];
     });
+    void trackStoreEvent({
+      storeSlug: store.slug,
+      eventType: "add_to_cart",
+      productId,
+    });
+  }
+
+  function toggleWish(productId: number) {
+    const next = toggleWishlistId(store.slug, productId);
+    setWishlist(next);
+    void trackStoreEvent({
+      storeSlug: store.slug,
+      eventType: next.includes(productId)
+        ? "wishlist_added"
+        : "wishlist_removed",
+      productId,
+    });
+  }
+
+  async function shareStore() {
+    const url =
+      typeof window !== "undefined"
+        ? window.location.href
+        : `/store/${store.slug}`;
+    const result = await shareOrCopy({
+      title: store.name,
+      text: store.description || `Shop ${store.name}`,
+      url,
+    });
+    setShareMsg(
+      result === "shared"
+        ? "Shared"
+        : result === "copied"
+          ? "Link copied"
+          : "Could not share"
+    );
+    void trackStoreEvent({ storeSlug: store.slug, eventType: "share_store" });
+    setTimeout(() => setShareMsg(""), 2500);
   }
 
   return (
-    <div className="min-h-screen bg-ink-50 pb-20">
+    <div className="mx-auto min-h-screen max-w-5xl px-3 pb-24 sm:px-4">
       <StorefrontHeader {...store} />
 
-      <div className="sticky top-0 z-10 border-b border-ink-100 bg-white/95 backdrop-blur">
-        <div className="mx-auto max-w-3xl space-y-3 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium text-ink-700">Products</p>
-            <Link
-              href={`/store/${store.slug}/cart`}
-              className="rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium text-ink-800"
-            >
-              Cart ({count})
-            </Link>
-          </div>
-
-          <div className="relative">
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search products…"
-              className="w-full rounded-lg border border-ink-200 bg-white px-3 py-2 pr-16 text-sm text-ink-900 placeholder:text-ink-400 focus:border-brand-600 focus:outline-none focus:ring-1 focus:ring-brand-600"
-              aria-label="Search products"
-            />
-            {query ? (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-xs font-medium text-ink-500 hover:text-ink-800"
-              >
-                Clear
-              </button>
-            ) : null}
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <button
-              type="button"
-              onClick={() => setCategory("All")}
-              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
-                category === "All"
-                  ? "bg-brand-600 text-white"
-                  : "bg-ink-100 text-ink-700 hover:bg-ink-200"
-              }`}
-            >
-              All
-            </button>
-            {categories.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCategory(c)}
-                className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
-                  category === c
-                    ? "bg-brand-600 text-white"
-                    : "bg-ink-100 text-ink-700 hover:bg-ink-200"
-                }`}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 text-xs text-ink-500">
-              Sort
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortOption)}
-                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-xs text-ink-800"
-              >
-                {SORT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="text-xs text-ink-400">
-              {visible.length} product{visible.length === 1 ? "" : "s"}
-            </p>
-          </div>
-        </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Link
+          href={`/store/${store.slug}/cart`}
+          className="rounded-full bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white"
+        >
+          Cart ({count})
+        </Link>
+        <Link
+          href={`/store/${store.slug}/wishlist`}
+          className="rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-medium text-ink-700"
+        >
+          Wishlist ({wishlist.length})
+        </Link>
+        <Link
+          href={`/store/${store.slug}/track`}
+          className="rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-medium text-ink-700"
+        >
+          Track order
+        </Link>
+        <button
+          type="button"
+          onClick={() => void shareStore()}
+          className="rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-medium text-ink-700"
+        >
+          Share store
+        </button>
+        {shareMsg ? (
+          <span className="text-xs text-brand-700">{shareMsg}</span>
+        ) : null}
       </div>
 
-      <main className="mx-auto max-w-3xl px-4 py-6">
-        {products.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-ink-200 bg-white p-8 text-center text-sm text-ink-500">
-            No products available right now.
+      {promotions.length > 0 ? (
+        <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          {promotions.map((p) => (
+            <span
+              key={p.code}
+              className="shrink-0 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-200"
+            >
+              {p.label} · use {p.code}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {featured.length > 0 ? (
+        <section className="mt-6">
+          <h2 className="text-lg font-semibold text-ink-950">Featured</h2>
+          <ul className="mt-3 flex gap-3 overflow-x-auto pb-2 sm:grid sm:grid-cols-3 sm:overflow-visible">
+            {featured.map((p) => (
+              <div key={p.id} className="w-56 shrink-0 sm:w-auto">
+                <ProductCard
+                  product={p}
+                  storeSlug={store.slug}
+                  onAdd={add}
+                  wishlisted={wishlist.includes(p.id)}
+                  onToggleWishlist={toggleWish}
+                  display={priceDisplay(p)}
+                />
+              </div>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <section className="mt-6 space-y-3">
+        <div className="relative">
+          <label className="sr-only" htmlFor="store-search">
+            Search products
+          </label>
+          <input
+            id="store-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, description, category…"
+            className="w-full rounded-xl border border-ink-200 bg-white py-2.5 pl-3 pr-20 text-sm"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs font-medium text-ink-500"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {["All", ...categories].map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setCategory(c)}
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${
+                category === c
+                  ? "bg-ink-900 text-white"
+                  : "bg-ink-100 text-ink-600"
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-ink-500">
+            {visible.length} result{visible.length === 1 ? "" : "s"}
+            {query ? ` for “${query}”` : ""}
           </p>
-        ) : visible.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-ink-200 bg-white p-8 text-center">
-            <p className="text-sm font-medium text-ink-800">No matches</p>
-            <p className="mt-1 text-sm text-ink-500">
-              Try a different search or category.
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortOption)}
+            className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {visible.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-ink-200 bg-ink-50 px-4 py-10 text-center">
+            <p className="text-sm font-medium text-ink-800">No products found</p>
+            <p className="mt-1 text-xs text-ink-500">
+              Try another search or clear filters.
             </p>
             <button
               type="button"
@@ -195,7 +293,7 @@ export function Storefront({
               }}
               className="mt-3 text-sm font-medium text-brand-700"
             >
-              Reset filters
+              Clear search & filters
             </button>
           </div>
         ) : (
@@ -206,11 +304,14 @@ export function Storefront({
                 product={p}
                 storeSlug={store.slug}
                 onAdd={add}
+                wishlisted={wishlist.includes(p.id)}
+                onToggleWishlist={toggleWish}
+                display={priceDisplay(p)}
               />
             ))}
           </ul>
         )}
-      </main>
+      </section>
     </div>
   );
 }

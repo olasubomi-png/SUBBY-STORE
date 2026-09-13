@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatNgn } from "@/lib/money";
 import {
@@ -10,6 +10,12 @@ import {
   writeCart,
 } from "@/lib/storefront/cart-client";
 import { ProductGallery } from "@/components/ProductGallery";
+import {
+  isWishlisted,
+  toggleWishlistId,
+} from "@/lib/storefront/wishlist-client";
+import { trackStoreEvent } from "@/lib/storefront/events-client";
+import { shareOrCopy } from "@/lib/storefront/share";
 
 export type PurchaseProduct = {
   id: number;
@@ -38,6 +44,17 @@ export function ProductPurchase({
   const [qty, setQty] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [wish, setWish] = useState(false);
+  const [shareMsg, setShareMsg] = useState("");
+
+  useEffect(() => {
+    setWish(isWishlisted(storeSlug, product.id));
+    void trackStoreEvent({
+      storeSlug,
+      eventType: "product_view",
+      productId: product.id,
+    });
+  }, [storeSlug, product.id]);
 
   const images = useMemo(() => {
     if (product.imageUrls && product.imageUrls.length > 0) {
@@ -56,6 +73,11 @@ export function ProductPurchase({
       const current = readCart(storeSlug);
       const next = addToCartLines(current, product.id, qty, product.stock);
       writeCart(storeSlug, next);
+      void trackStoreEvent({
+        storeSlug,
+        eventType: "add_to_cart",
+        productId: product.id,
+      });
       setMessage(`Added ${qty} to cart`);
       setTimeout(() => setMessage(null), 2500);
     } catch (e) {
@@ -165,9 +187,80 @@ export function ProductPurchase({
             </p>
           ) : null}
 
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              aria-label={wish ? "Remove from wishlist" : "Add to wishlist"}
+              onClick={() => {
+                const next = toggleWishlistId(storeSlug, product.id);
+                setWish(next.includes(product.id));
+                void trackStoreEvent({
+                  storeSlug,
+                  eventType: next.includes(product.id)
+                    ? "wishlist_added"
+                    : "wishlist_removed",
+                  productId: product.id,
+                });
+              }}
+              className="text-sm font-medium text-ink-700"
+            >
+              {wish ? "♥ Saved" : "♡ Wishlist"}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const url =
+                  typeof window !== "undefined" ? window.location.href : "";
+                const r = await shareOrCopy({
+                  title: product.name,
+                  text: product.name,
+                  url,
+                });
+                setShareMsg(
+                  r === "shared"
+                    ? "Shared"
+                    : r === "copied"
+                      ? "Link copied"
+                      : "Could not share"
+                );
+                void trackStoreEvent({
+                  storeSlug,
+                  eventType: "share_product",
+                  productId: product.id,
+                });
+              }}
+              className="text-sm font-medium text-ink-700"
+            >
+              Share
+            </button>
+            {shareMsg ? (
+              <span className="text-xs text-brand-700">{shareMsg}</span>
+            ) : null}
+          </div>
           <p className="text-xs text-ink-400">Sold by {storeName}</p>
         </div>
       </div>
+      {!out ? (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-ink-100 bg-white/95 p-3 backdrop-blur sm:hidden">
+          <div className="mx-auto flex max-w-lg gap-2">
+            <button
+              type="button"
+              onClick={handleAdd}
+              className="flex-1 rounded-lg border border-ink-200 py-3 text-sm font-semibold"
+            >
+              Add to cart
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleBuyNow}
+              className="flex-1 rounded-lg bg-brand-600 py-3 text-sm font-semibold text-white"
+            >
+              Buy now
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

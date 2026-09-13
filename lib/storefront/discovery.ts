@@ -47,7 +47,14 @@ export function filterProducts(
     if (!q) return true;
     const name = p.name.toLowerCase();
     const desc = (p.description || "").toLowerCase();
-    return name.includes(q) || desc.includes(q);
+    const cat = (p.category || "").toLowerCase();
+    const slug = (p.slug || "").toLowerCase();
+    return (
+      name.includes(q) ||
+      desc.includes(q) ||
+      cat.includes(q) ||
+      slug.includes(q)
+    );
   });
 }
 

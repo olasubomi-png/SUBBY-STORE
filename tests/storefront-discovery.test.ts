@@ -116,3 +116,23 @@ describe("cart key format", () => {
     expect(`subby_cart_ada-fashion`).toBe("subby_cart_ada-fashion");
   });
 });
+
+describe("phase 7 discovery search", () => {
+  it("matches category and description", () => {
+    const products = [
+      {
+        id: 1,
+        name: "Alpha",
+        slug: "alpha",
+        description: "wireless earbuds",
+        priceKobo: 1000,
+        stock: 2,
+        imageUrl: null,
+        category: "Electronics",
+        featured: false,
+      },
+    ];
+    expect(filterProducts(products, { query: "electronics" })).toHaveLength(1);
+    expect(filterProducts(products, { query: "earbuds" })).toHaveLength(1);
+  });
+});

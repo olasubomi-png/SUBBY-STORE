@@ -243,3 +243,27 @@ export const couponProducts = pgTable(
     index("coupon_products_product_idx").on(t.productId),
   ]
 );
+
+/** Lightweight storefront conversion events (anonymous-safe). */
+export const storeEvents = pgTable(
+  "store_events",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    productId: integer("product_id").references(() => products.id, {
+      onDelete: "set null",
+    }),
+    eventType: varchar("event_type", { length: 40 }).notNull(),
+    visitorId: varchar("visitor_id", { length: 64 }),
+    metadata: text("metadata"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("store_events_store_idx").on(t.storeId),
+    index("store_events_type_idx").on(t.eventType),
+    index("store_events_created_idx").on(t.createdAt),
+    index("store_events_product_idx").on(t.productId),
+  ]
+);
