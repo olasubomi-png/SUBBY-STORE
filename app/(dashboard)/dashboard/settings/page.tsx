@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { shareOrCopy } from "@/lib/storefront/share";
 
 type Store = {
   id: number;
@@ -17,24 +19,113 @@ type Store = {
   facebookUrl: string | null;
   twitterUrl: string | null;
   tiktokUrl: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  seoKeywords: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogImageUrl: string | null;
 };
+
+function field(
+  label: string,
+  value: string,
+  onChange: (v: string) => void,
+  opts?: {
+    multiline?: boolean;
+    maxLength?: number;
+    placeholder?: string;
+    type?: string;
+    hint?: string;
+  }
+) {
+  const common =
+    "mt-1 w-full rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm text-ink-900";
+  return (
+    <label className="block text-sm">
+      <span className="font-medium text-ink-700">{label}</span>
+      {opts?.hint ? (
+        <span className="mt-0.5 block text-xs text-ink-400">{opts.hint}</span>
+      ) : null}
+      {opts?.multiline ? (
+        <textarea
+          className={`${common} min-h-[88px]`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          maxLength={opts.maxLength}
+          placeholder={opts.placeholder}
+        />
+      ) : (
+        <input
+          type={opts?.type || "text"}
+          className={common}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          maxLength={opts?.maxLength}
+          placeholder={opts?.placeholder}
+        />
+      )}
+    </label>
+  );
+}
 
 export default function SettingsPage() {
   const [store, setStore] = useState<Store | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState<"logo" | "banner" | null>(null);
+  const [uploading, setUploading] = useState<"logo" | "banner" | "og" | null>(
+    null
+  );
+  const [shareMsg, setShareMsg] = useState("");
 
   async function load() {
-    const d = await fetch("/api/dashboard").then((r) => r.json());
-    setStore(d.stores?.[0] || null);
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/dashboard", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        setError("Your session has expired. Please log in again.");
+        setStore(null);
+        return;
+      }
+      if (!res.ok) {
+        setError(d.error || "Could not load store");
+        return;
+      }
+      const s = d.stores?.[0] || null;
+      setStore(
+        s
+          ? {
+              ...s,
+              seoTitle: s.seoTitle ?? null,
+              seoDescription: s.seoDescription ?? null,
+              seoKeywords: s.seoKeywords ?? null,
+              ogTitle: s.ogTitle ?? null,
+              ogDescription: s.ogDescription ?? null,
+              ogImageUrl: s.ogImageUrl ?? null,
+            }
+          : null
+      );
+    } catch {
+      setError("Network error");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
+
+  function patch(partial: Partial<Store>) {
+    setStore((prev) => (prev ? { ...prev, ...partial } : prev));
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -46,6 +137,7 @@ export default function SettingsPage() {
       const res = await fetch("/api/stores", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           storeId: store.id,
           name: store.name,
@@ -58,6 +150,14 @@ export default function SettingsPage() {
           facebookUrl: store.facebookUrl,
           twitterUrl: store.twitterUrl,
           tiktokUrl: store.tiktokUrl,
+          logoUrl: store.logoUrl,
+          bannerUrl: store.bannerUrl,
+          seoTitle: store.seoTitle,
+          seoDescription: store.seoDescription,
+          seoKeywords: store.seoKeywords,
+          ogTitle: store.ogTitle,
+          ogDescription: store.ogDescription,
+          ogImageUrl: store.ogImageUrl,
         }),
       });
       const data = await res.json();
@@ -71,7 +171,7 @@ export default function SettingsPage() {
     }
   }
 
-  async function uploadImage(kind: "logo" | "banner", file: File) {
+  async function uploadImage(kind: "logo" | "banner" | "og", file: File) {
     if (!store) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
       setError("Only JPG, PNG, and WebP images are allowed");
@@ -83,21 +183,29 @@ export default function SettingsPage() {
     }
     setUploading(kind);
     setError("");
-    setSuccess("");
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("kind", kind);
-      form.append("storeId", String(store.id));
-      const up = await fetch("/api/uploads/store", {
+      const fd = new FormData();
+      fd.set("file", file);
+      fd.set("storeId", String(store.id));
+      fd.set("kind", kind === "og" ? "banner" : kind);
+      const res = await fetch("/api/uploads/store", {
         method: "POST",
-        body: form,
+        body: fd,
+        credentials: "include",
       });
-      const upData = await up.json();
-      if (!up.ok) throw new Error(upData.error || "Upload failed");
-      if (upData.store) setStore({ ...store, ...upData.store });
-      else await load();
-      setSuccess(kind === "logo" ? "Logo updated" : "Banner updated");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      const url = data.url as string;
+      if (kind === "logo") patch({ logoUrl: url });
+      else if (kind === "banner") patch({ bannerUrl: url });
+      else patch({ ogImageUrl: url });
+      setSuccess(
+        kind === "logo"
+          ? "Logo uploaded — save to apply"
+          : kind === "banner"
+            ? "Banner uploaded — save to apply"
+            : "Share image uploaded — save to apply"
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -105,250 +213,291 @@ export default function SettingsPage() {
     }
   }
 
-  async function removeImage(kind: "logo" | "banner") {
+  async function shareStore() {
     if (!store) return;
-    if (!confirm(`Remove store ${kind}?`)) return;
-    setError("");
-    const field = kind === "logo" ? "logoUrl" : "bannerUrl";
-    const res = await fetch("/api/stores", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storeId: store.id, [field]: null }),
+    const url =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/store/${store.slug}`
+        : `/store/${store.slug}`;
+    const result = await shareOrCopy({
+      title: store.seoTitle || store.name,
+      text: store.seoDescription || store.description || `Shop ${store.name}`,
+      url,
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || "Failed");
-      return;
-    }
-    setStore({ ...store, ...data.store });
-    setSuccess(kind === "logo" ? "Logo removed" : "Banner removed");
+    setShareMsg(
+      result === "shared"
+        ? "Shared"
+        : result === "copied"
+          ? "Store link copied"
+          : "Could not share"
+    );
+    setTimeout(() => setShareMsg(""), 2500);
   }
 
-  function copyLink() {
-    if (!store) return;
-    const url = `${window.location.origin}/store/${store.slug}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  if (loading) {
+    return (
+      <div className="p-4 sm:p-6">
+        <p className="text-sm text-ink-500">Loading store settings…</p>
+      </div>
+    );
   }
 
   if (!store) {
-    return <p className="text-sm text-ink-500">No store configured.</p>;
+    return (
+      <div className="p-4 sm:p-6">
+        <h1 className="text-xl font-semibold text-ink-950">Store settings</h1>
+        {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+        <p className="mt-3 text-sm text-ink-600">
+          Create a store first to manage branding and SEO.
+        </p>
+        <Link
+          href="/dashboard/new-store"
+          className="mt-4 inline-block text-sm font-medium text-brand-700"
+        >
+          Create store
+        </Link>
+      </div>
+    );
   }
 
-  const publicPath = `/store/${store.slug}`;
+  const publicUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/store/${store.slug}`
+      : `/store/${store.slug}`;
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-ink-950">Store settings</h1>
-
-      {(error || success) && (
-        <p
-          className={`text-sm ${error ? "text-red-600" : "text-brand-700"}`}
-          role="status"
-        >
-          {error || success}
-        </p>
-      )}
-
-      <div className="rounded-xl border border-ink-100 bg-white p-4">
-        <p className="text-xs uppercase tracking-wide text-ink-400">Your store</p>
-        <p className="mt-1 break-all font-medium text-brand-700">{publicPath}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
+    <div className="mx-auto max-w-2xl space-y-6 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-ink-950">Store settings</h1>
+          <p className="mt-1 text-sm text-ink-500">
+            Branding, contact details, and how your store appears when shared.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href={`/store/${store.slug}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm font-medium text-ink-800"
+          >
+            Preview store
+          </Link>
           <button
             type="button"
-            onClick={copyLink}
-            className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+            onClick={() => void shareStore()}
+            className="rounded-lg border border-ink-200 bg-white px-3 py-2 text-sm font-medium text-ink-800"
           >
-            {copied ? "Copied" : "Copy link"}
+            Share store
           </button>
-          <a
-            href={publicPath}
-            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm text-white"
-          >
-            View store
-          </a>
         </div>
       </div>
 
-      <section className="space-y-3 rounded-xl border border-ink-100 bg-white p-4">
-        <h2 className="text-sm font-semibold text-ink-900">Branding</h2>
-        <div className="space-y-2">
-          <p className="text-xs text-ink-500">Logo</p>
-          <div className="flex items-center gap-3">
-            <div className="h-16 w-16 overflow-hidden rounded-full bg-ink-100">
+      <div className="rounded-xl border border-ink-100 bg-ink-50 px-3 py-2 text-sm text-ink-700">
+        <span className="text-ink-400">Public URL · </span>
+        <a
+          href={publicUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-brand-700 break-all"
+        >
+          /store/{store.slug}
+        </a>
+        {shareMsg ? (
+          <span className="ml-2 text-xs text-brand-700">{shareMsg}</span>
+        ) : null}
+      </div>
+
+      {error ? (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      ) : null}
+      {success ? (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {success}
+        </p>
+      ) : null}
+
+      <form onSubmit={save} className="space-y-8">
+        <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
+          <h2 className="text-sm font-semibold text-ink-900">Appearance</h2>
+          {field("Store name", store.name, (v) => patch({ name: v }), {
+            maxLength: 120,
+          })}
+          {field(
+            "Description",
+            store.description || "",
+            (v) => patch({ description: v }),
+            { multiline: true, maxLength: 2000 }
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-sm font-medium text-ink-700">Logo</p>
               {store.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={store.logoUrl}
                   alt=""
-                  className="h-full w-full object-cover"
+                  className="mt-2 h-16 w-16 rounded-lg object-cover"
                 />
-              ) : null}
-            </div>
-            <label className="cursor-pointer rounded-md border border-ink-200 px-2.5 py-1.5 text-xs">
-              {uploading === "logo" ? "Uploading…" : "Replace logo"}
+              ) : (
+                <p className="mt-2 text-xs text-ink-400">No logo yet</p>
+              )}
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                disabled={!!uploading}
+                className="mt-2 block w-full text-xs"
+                disabled={uploading !== null}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f) uploadImage("logo", f);
-                  e.target.value = "";
+                  if (f) void uploadImage("logo", f);
                 }}
               />
-            </label>
-            {store.logoUrl ? (
-              <button
-                type="button"
-                onClick={() => removeImage("logo")}
-                className="text-xs text-red-600"
-              >
-                Remove
-              </button>
-            ) : null}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-ink-700">Banner</p>
+              {store.bannerUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={store.bannerUrl}
+                  alt=""
+                  className="mt-2 h-16 w-full max-w-xs rounded-lg object-cover"
+                />
+              ) : (
+                <p className="mt-2 text-xs text-ink-400">No banner yet</p>
+              )}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="mt-2 block w-full text-xs"
+                disabled={uploading !== null}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadImage("banner", f);
+                }}
+              />
+            </div>
           </div>
-        </div>
-        <div className="space-y-2">
-          <p className="text-xs text-ink-500">Banner</p>
-          <div className="aspect-[3/1] w-full overflow-hidden rounded-lg bg-ink-100">
-            {store.bannerUrl ? (
+          {uploading ? (
+            <p className="text-xs text-ink-500">Uploading {uploading}…</p>
+          ) : null}
+        </section>
+
+        <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
+          <h2 className="text-sm font-semibold text-ink-900">Contact</h2>
+          {field("Phone", store.phone || "", (v) => patch({ phone: v }), {
+            maxLength: 32,
+          })}
+          {field(
+            "WhatsApp",
+            store.whatsapp || "",
+            (v) => patch({ whatsapp: v }),
+            { maxLength: 32, placeholder: "2348012345678" }
+          )}
+          {field("Email", store.email || "", (v) => patch({ email: v }), {
+            type: "email",
+            maxLength: 255,
+          })}
+          {field(
+            "Address",
+            store.address || "",
+            (v) => patch({ address: v }),
+            { multiline: true, maxLength: 500 }
+          )}
+        </section>
+
+        <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
+          <h2 className="text-sm font-semibold text-ink-900">Social links</h2>
+          {(
+            [
+              ["instagramUrl", "Instagram URL"],
+              ["facebookUrl", "Facebook URL"],
+              ["twitterUrl", "Twitter / X URL"],
+              ["tiktokUrl", "TikTok URL"],
+            ] as const
+          ).map(([key, label]) =>
+            field(label, store[key] || "", (v) => patch({ [key]: v }), {
+              maxLength: 500,
+              placeholder: "https://",
+            })
+          )}
+        </section>
+
+        <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
+          <h2 className="text-sm font-semibold text-ink-900">
+            SEO & link previews
+          </h2>
+          <p className="text-xs text-ink-500">
+            Controls search results and how your store looks when shared on
+            WhatsApp, X, or Facebook. Leave blank to use your store name and
+            description.
+          </p>
+          {field(
+            "SEO title",
+            store.seoTitle || "",
+            (v) => patch({ seoTitle: v }),
+            { maxLength: 70, hint: "Up to 70 characters" }
+          )}
+          {field(
+            "SEO description",
+            store.seoDescription || "",
+            (v) => patch({ seoDescription: v }),
+            { multiline: true, maxLength: 160, hint: "Up to 160 characters" }
+          )}
+          {field(
+            "Keywords",
+            store.seoKeywords || "",
+            (v) => patch({ seoKeywords: v }),
+            {
+              maxLength: 255,
+              placeholder: "fashion, lagos, thrift",
+              hint: "Comma-separated",
+            }
+          )}
+          {field(
+            "Social title",
+            store.ogTitle || "",
+            (v) => patch({ ogTitle: v }),
+            { maxLength: 70 }
+          )}
+          {field(
+            "Social description",
+            store.ogDescription || "",
+            (v) => patch({ ogDescription: v }),
+            { multiline: true, maxLength: 160 }
+          )}
+          <div>
+            <p className="text-sm font-medium text-ink-700">Social image</p>
+            <p className="text-xs text-ink-400">
+              Used for link previews. Falls back to banner or logo.
+            </p>
+            {store.ogImageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={store.bannerUrl}
+                src={store.ogImageUrl}
                 alt=""
-                className="h-full w-full object-cover"
+                className="mt-2 h-20 w-full max-w-sm rounded-lg object-cover"
               />
-            ) : (
-              <div className="flex h-full items-center justify-center text-xs text-ink-400">
-                No banner
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <label className="cursor-pointer rounded-md border border-ink-200 px-2.5 py-1.5 text-xs">
-              {uploading === "banner" ? "Uploading…" : "Replace banner"}
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                disabled={!!uploading}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) uploadImage("banner", f);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-            {store.bannerUrl ? (
-              <button
-                type="button"
-                onClick={() => removeImage("banner")}
-                className="text-xs text-red-600"
-              >
-                Remove
-              </button>
             ) : null}
-          </div>
-        </div>
-      </section>
-
-      <form
-        onSubmit={save}
-        className="space-y-3 rounded-xl border border-ink-100 bg-white p-4"
-      >
-        <h2 className="text-sm font-semibold text-ink-900">Store identity</h2>
-        <label className="block text-sm">
-          Name
-          <input
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            value={store.name}
-            onChange={(e) => setStore({ ...store, name: e.target.value })}
-            required
-            maxLength={120}
-          />
-        </label>
-        <label className="block text-sm">
-          Description
-          <textarea
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            rows={3}
-            value={store.description || ""}
-            onChange={(e) =>
-              setStore({ ...store, description: e.target.value })
-            }
-            maxLength={2000}
-          />
-        </label>
-
-        <h2 className="pt-2 text-sm font-semibold text-ink-900">Contact</h2>
-        <label className="block text-sm">
-          Phone
-          <input
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            value={store.phone || ""}
-            onChange={(e) => setStore({ ...store, phone: e.target.value })}
-            maxLength={32}
-          />
-        </label>
-        <label className="block text-sm">
-          WhatsApp
-          <input
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            value={store.whatsapp || ""}
-            onChange={(e) => setStore({ ...store, whatsapp: e.target.value })}
-            maxLength={32}
-          />
-        </label>
-        <label className="block text-sm">
-          Email
-          <input
-            type="email"
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            value={store.email || ""}
-            onChange={(e) => setStore({ ...store, email: e.target.value })}
-            maxLength={255}
-          />
-        </label>
-        <label className="block text-sm">
-          Address
-          <textarea
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-            rows={2}
-            value={store.address || ""}
-            onChange={(e) => setStore({ ...store, address: e.target.value })}
-            maxLength={500}
-          />
-        </label>
-
-        <h2 className="pt-2 text-sm font-semibold text-ink-900">Social</h2>
-        {(
-          [
-            ["instagramUrl", "Instagram"],
-            ["facebookUrl", "Facebook"],
-            ["twitterUrl", "X / Twitter"],
-            ["tiktokUrl", "TikTok"],
-          ] as const
-        ).map(([key, label]) => (
-          <label key={key} className="block text-sm">
-            {label}
             <input
-              type="url"
-              className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
-              placeholder="https://"
-              value={store[key] || ""}
-              onChange={(e) => setStore({ ...store, [key]: e.target.value })}
-              maxLength={500}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="mt-2 block w-full text-xs"
+              disabled={uploading !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void uploadImage("og", f);
+              }}
             />
-          </label>
-        ))}
+          </div>
+        </section>
 
         <button
           type="submit"
-          disabled={saving}
-          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          disabled={saving || uploading !== null}
+          className="w-full rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto"
         >
           {saving ? "Saving…" : "Save changes"}
         </button>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStoreBySlug, listProducts } from "@/lib/server/repo";
 import { listPublicStorePromotions } from "@/lib/server/public-promotions";
+import { resolveStoreSeo } from "@/lib/storefront/seo";
 import { Storefront } from "@/components/Storefront";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -10,17 +11,27 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
   if (!store) return { title: "Store not found" };
-  const description =
-    store.description?.trim() || `Shop ${store.name} on SUBBY-STORE`;
+
+  const seo = resolveStoreSeo(store as Parameters<typeof resolveStoreSeo>[0], process.env.APP_URL);
+
   return {
-    title: store.name,
-    description,
+    title: seo.title,
+    description: seo.description,
+    keywords: seo.keywords,
+    alternates: seo.canonical ? { canonical: seo.canonical } : undefined,
     openGraph: {
-      title: store.name,
-      description,
-      ...(store.logoUrl ? { images: [{ url: store.logoUrl }] } : {}),
+      title: seo.ogTitle,
+      description: seo.ogDescription,
+      type: "website",
+      url: seo.canonical,
+      ...(seo.ogImage ? { images: [{ url: seo.ogImage }] } : {}),
     },
-    twitter: { card: "summary", title: store.name, description },
+    twitter: {
+      card: seo.ogImage ? "summary_large_image" : "summary",
+      title: seo.ogTitle,
+      description: seo.ogDescription,
+      ...(seo.ogImage ? { images: [seo.ogImage] } : {}),
+    },
   };
 }
 

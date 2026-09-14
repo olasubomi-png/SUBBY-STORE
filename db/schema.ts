@@ -45,6 +45,13 @@ export const stores = pgTable(
     facebookUrl: text("facebook_url"),
     twitterUrl: text("twitter_url"),
     tiktokUrl: text("tiktok_url"),
+    /** Seller-controlled SEO / social preview (optional) */
+    seoTitle: varchar("seo_title", { length: 70 }),
+    seoDescription: varchar("seo_description", { length: 160 }),
+    seoKeywords: varchar("seo_keywords", { length: 255 }),
+    ogTitle: varchar("og_title", { length: 70 }),
+    ogDescription: varchar("og_description", { length: 160 }),
+    ogImageUrl: text("og_image_url"),
     currency: varchar("currency", { length: 3 }).default("NGN").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

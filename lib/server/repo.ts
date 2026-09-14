@@ -180,6 +180,12 @@ export async function updateStore(
     facebookUrl: string | null;
     twitterUrl: string | null;
     tiktokUrl: string | null;
+    seoTitle: string | null;
+    seoDescription: string | null;
+    seoKeywords: string | null;
+    ogTitle: string | null;
+    ogDescription: string | null;
+    ogImageUrl: string | null;
   }>
 ) {
   await getStoreOwned(storeId, ownerId);
@@ -202,6 +208,12 @@ export async function updateStore(
   if (patch.facebookUrl !== undefined) values.facebookUrl = patch.facebookUrl;
   if (patch.twitterUrl !== undefined) values.twitterUrl = patch.twitterUrl;
   if (patch.tiktokUrl !== undefined) values.tiktokUrl = patch.tiktokUrl;
+  if (patch.seoTitle !== undefined) values.seoTitle = patch.seoTitle;
+  if (patch.seoDescription !== undefined) values.seoDescription = patch.seoDescription;
+  if (patch.seoKeywords !== undefined) values.seoKeywords = patch.seoKeywords;
+  if (patch.ogTitle !== undefined) values.ogTitle = patch.ogTitle;
+  if (patch.ogDescription !== undefined) values.ogDescription = patch.ogDescription;
+  if (patch.ogImageUrl !== undefined) values.ogImageUrl = patch.ogImageUrl;
   const rows = await db
     .update(stores)
     .set(values)

@@ -25,6 +25,12 @@ export type MemoryStore = {
     facebookUrl: string | null;
     twitterUrl: string | null;
     tiktokUrl: string | null;
+    seoTitle: string | null;
+    seoDescription: string | null;
+    seoKeywords: string | null;
+    ogTitle: string | null;
+    ogDescription: string | null;
+    ogImageUrl: string | null;
     currency: string;
     createdAt: Date;
     updatedAt: Date;

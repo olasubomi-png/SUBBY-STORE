@@ -7,6 +7,10 @@ const optionalUrl = z
 const optionalText = (max: number) =>
   z.union([z.string().max(max), z.null()]).optional();
 
+/** Optional SEO text — empty string clears to null on the server. */
+const optionalSeoText = (max: number) =>
+  z.union([z.string().max(max), z.literal(""), z.null()]).optional();
+
 export const patchStoreSchema = z
   .object({
     storeId: z.number().int().positive(),
@@ -24,6 +28,12 @@ export const patchStoreSchema = z
     facebookUrl: optionalUrl,
     twitterUrl: optionalUrl,
     tiktokUrl: optionalUrl,
+    seoTitle: optionalSeoText(70),
+    seoDescription: optionalSeoText(160),
+    seoKeywords: optionalSeoText(255),
+    ogTitle: optionalSeoText(70),
+    ogDescription: optionalSeoText(160),
+    ogImageUrl: optionalUrl,
   })
   .strict();
 

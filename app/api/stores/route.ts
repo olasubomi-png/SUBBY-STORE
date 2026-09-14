@@ -115,6 +115,16 @@ export async function PATCH(req: Request) {
       patch.twitterUrl = emptyToNull(data.twitterUrl);
     if (data.tiktokUrl !== undefined)
       patch.tiktokUrl = emptyToNull(data.tiktokUrl);
+    if (data.seoTitle !== undefined) patch.seoTitle = emptyToNull(data.seoTitle);
+    if (data.seoDescription !== undefined)
+      patch.seoDescription = emptyToNull(data.seoDescription);
+    if (data.seoKeywords !== undefined)
+      patch.seoKeywords = emptyToNull(data.seoKeywords);
+    if (data.ogTitle !== undefined) patch.ogTitle = emptyToNull(data.ogTitle);
+    if (data.ogDescription !== undefined)
+      patch.ogDescription = emptyToNull(data.ogDescription);
+    if (data.ogImageUrl !== undefined)
+      patch.ogImageUrl = emptyToNull(data.ogImageUrl);
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ store: existing });
@@ -122,10 +132,16 @@ export async function PATCH(req: Request) {
 
     const store = await updateStore(session.userId, data.storeId, patch);
 
-    for (const key of ["logoUrl", "bannerUrl"] as const) {
+    for (const key of ["logoUrl", "bannerUrl", "ogImageUrl"] as const) {
       if (data[key] === undefined) continue;
-      const prev = existing[key];
-      const next = store[key];
+      const prev = (existing as Record<string, unknown>)[key] as
+        | string
+        | null
+        | undefined;
+      const next = (store as Record<string, unknown>)[key] as
+        | string
+        | null
+        | undefined;
       if (prev && prev !== next) {
         await tryDeleteManagedBlob(prev, session.userId);
       }
