@@ -30,11 +30,26 @@ const STEPS = [
 ] as const;
 
 function stepIndex(paymentStatus: string, orderStatus: string): number {
+  if (orderStatus === "cancelled" || orderStatus === "refund_required") return -1;
+  if (paymentStatus === "failed") return -1;
   if (orderStatus === "delivered") return 4;
   if (orderStatus === "shipped") return 3;
   if (orderStatus === "processing" || orderStatus === "confirmed") return 2;
   if (paymentStatus === "paid") return 1;
   return 0;
+}
+
+function statusBanner(paymentStatus: string, orderStatus: string): string | null {
+  if (orderStatus === "refund_required") {
+    return "Payment received but fulfillment requires a refund. Contact the store.";
+  }
+  if (orderStatus === "cancelled") {
+    return "This order was cancelled.";
+  }
+  if (paymentStatus === "failed") {
+    return "Payment failed or was not completed.";
+  }
+  return null;
 }
 
 export default function OrderTrackPage() {
@@ -107,6 +122,19 @@ export default function OrderTrackPage() {
 
       {order ? (
         <div className="mt-8 space-y-4 rounded-2xl border border-ink-100 bg-white p-4">
+          {statusBanner(order.paymentStatus, order.orderStatus) ? (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {statusBanner(order.paymentStatus, order.orderStatus)}
+            </p>
+          ) : null}
+          <div>
+            <p className="text-xs uppercase tracking-wide text-ink-400">
+              Status
+            </p>
+            <p className="text-sm font-medium capitalize text-ink-900">
+              Payment: {order.paymentStatus} · Order: {order.orderStatus}
+            </p>
+          </div>
           <div>
             <p className="text-xs uppercase tracking-wide text-ink-400">
               Reference

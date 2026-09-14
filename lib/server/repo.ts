@@ -287,6 +287,25 @@ function normalizeGalleryUrls(
   return out.slice(0, 12);
 }
 
+
+/** Public-safe product lookup within a store (active or inactive). */
+export async function getProductInStore(storeId: number, productId: number) {
+  if (useMemory()) {
+    return (
+      mem.getMemoryStore().products.find(
+        (p) => p.id === productId && p.storeId === storeId
+      ) ?? null
+    );
+  }
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(products)
+    .where(and(eq(products.id, productId), eq(products.storeId, storeId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function listProducts(storeId: number, activeOnly = false) {
   if (useMemory()) return mem.memListProducts(storeId, activeOnly);
   const db = getDb();
@@ -814,6 +833,35 @@ export async function createPendingOrder(input: {
 }
 
 export async function confirmPaidOrder(
+  reference: string,
+  amountKobo: number,
+  rawEventId?: string | null
+) {
+  const result = await confirmPaidOrderInner(reference, amountKobo, rawEventId);
+  // Server-side only: record purchase after successful first confirmation
+  if (
+    !result.alreadyPaid &&
+    result.order.paymentStatus === "paid" &&
+    !result.refundRequired
+  ) {
+    try {
+      const { recordStoreEvent } = await import("@/lib/server/store-events");
+      await recordStoreEvent({
+        storeId: result.order.storeId,
+        eventType: "purchase_completed",
+        metadata: JSON.stringify({
+          orderId: result.order.id,
+          totalKobo: result.order.totalKobo,
+        }).slice(0, 500),
+      });
+    } catch {
+      /* non-blocking analytics */
+    }
+  }
+  return result;
+}
+
+async function confirmPaidOrderInner(
   reference: string,
   amountKobo: number,
   rawEventId?: string | null

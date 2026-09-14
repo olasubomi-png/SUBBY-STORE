@@ -32,3 +32,22 @@ describe("wishlist key shape", () => {
     expect(normalizeQuery("  Hello ")).toBe("hello");
   });
 });
+
+describe("product-scoped promotion display", () => {
+  it("applies only to eligible product ids", () => {
+    const promos: PublicPromotion[] = [
+      {
+        code: "ONLY1",
+        type: "percentage",
+        value: 50,
+        label: "50% OFF",
+        productIds: [1],
+      },
+    ];
+    const a = displayPriceWithPromotion(100_000, promos, 1);
+    expect(a.discountKobo).toBe(50_000);
+    const b = displayPriceWithPromotion(100_000, promos, 2);
+    expect(b.discountKobo).toBe(0);
+    expect(b.currentKobo).toBe(100_000);
+  });
+});

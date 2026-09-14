@@ -5,11 +5,14 @@ export type PublicPromotion = {
   type: "percentage" | "fixed";
   value: number;
   label: string;
+  /** When set, only these product IDs are eligible */
+  productIds?: number[];
 };
 
 export function displayPriceWithPromotion(
   priceKobo: number,
-  promotions: PublicPromotion[]
+  promotions: PublicPromotion[],
+  productId?: number
 ): {
   currentKobo: number;
   originalKobo: number;
@@ -25,6 +28,18 @@ export function displayPriceWithPromotion(
     code: null as string | null,
   };
   for (const p of promotions) {
+    if (
+      p.productIds &&
+      p.productIds.length > 0 &&
+      productId != null &&
+      !p.productIds.includes(productId)
+    ) {
+      continue;
+    }
+    // Product-scoped promo without productId context: skip unit display
+    if (p.productIds && p.productIds.length > 0 && productId == null) {
+      continue;
+    }
     const { discountKobo, totalKobo } = computeDiscount({
       type: p.type as CouponType,
       value: p.value,

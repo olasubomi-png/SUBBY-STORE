@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   StorefrontHeader,
@@ -60,6 +60,7 @@ export function Storefront({
   const [sort, setSort] = useState<SortOption>("featured");
   const [shareMsg, setShareMsg] = useState("");
 
+  const viewTracked = useRef<string | null>(null);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(cartKey(store.slug));
@@ -68,6 +69,8 @@ export function Storefront({
       /* ignore */
     }
     setWishlist(readWishlist(store.slug));
+    if (viewTracked.current === store.slug) return;
+    viewTracked.current = store.slug;
     void trackStoreEvent({ storeSlug: store.slug, eventType: "store_view" });
   }, [store.slug]);
 
@@ -98,7 +101,7 @@ export function Storefront({
   );
 
   function priceDisplay(p: DiscoveryProduct) {
-    return displayPriceWithPromotion(p.priceKobo, promotions);
+    return displayPriceWithPromotion(p.priceKobo, promotions, p.id);
   }
 
   function add(productId: number) {

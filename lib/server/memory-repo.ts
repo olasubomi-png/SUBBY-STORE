@@ -662,6 +662,20 @@ export async function memConfirmPaidOrderWithEvent(
       const payment = store.payments.find((p) => p.reference === reference);
       if (payment) payment.rawEventId = rawEventId;
     }
+    if (
+      !result.alreadyPaid &&
+      result.order.paymentStatus === "paid" &&
+      !result.refundRequired
+    ) {
+      memRecordStoreEvent({
+        storeId: result.order.storeId,
+        eventType: "purchase_completed",
+        metadata: JSON.stringify({
+          orderId: result.order.id,
+          totalKobo: result.order.totalKobo,
+        }).slice(0, 500),
+      });
+    }
     return result;
   };
 

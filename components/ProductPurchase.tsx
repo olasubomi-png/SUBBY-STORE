@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatNgn } from "@/lib/money";
 import {
@@ -47,8 +47,12 @@ export function ProductPurchase({
   const [wish, setWish] = useState(false);
   const [shareMsg, setShareMsg] = useState("");
 
+  const viewTracked = useRef<string | null>(null);
   useEffect(() => {
     setWish(isWishlisted(storeSlug, product.id));
+    const key = `${storeSlug}:${product.id}`;
+    if (viewTracked.current === key) return;
+    viewTracked.current = key;
     void trackStoreEvent({
       storeSlug,
       eventType: "product_view",

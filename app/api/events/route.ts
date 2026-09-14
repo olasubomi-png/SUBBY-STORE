@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getStoreBySlug } from "@/lib/server/repo";
+import { getStoreBySlug, getProductInStore } from "@/lib/server/repo";
 import { recordStoreEvent } from "@/lib/server/store-events";
 
 const ALLOWED = new Set([
@@ -8,7 +8,7 @@ const ALLOWED = new Set([
   "store_view",
   "add_to_cart",
   "checkout_started",
-  "purchase_completed",
+  // purchase_completed is server-only (payment confirmation)
   "wishlist_added",
   "wishlist_removed",
   "share_product",
@@ -30,6 +30,13 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  // Reject oversized payloads early
+  const rawSize = JSON.stringify(body ?? {}).length;
+  if (rawSize > 4096) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
@@ -37,22 +44,44 @@ export async function POST(req: Request) {
   if (!ALLOWED.has(parsed.data.eventType)) {
     return NextResponse.json({ error: "Unknown event" }, { status: 400 });
   }
+
   const store = await getStoreBySlug(parsed.data.storeSlug);
   if (!store) {
-    return NextResponse.json({ error: "Store not found" }, { status: 404 });
+    // Soft-fail for customers
+    return NextResponse.json({ ok: true });
   }
+
+  let productId: number | undefined = parsed.data.productId;
+  if (productId != null) {
+    try {
+      const product = await getProductInStore(store.id, productId);
+      if (!product) {
+        productId = undefined; // ignore mismatched product/store
+      }
+    } catch {
+      productId = undefined;
+    }
+  }
+
+  let metadata: string | null = null;
+  if (parsed.data.metadata) {
+    try {
+      metadata = JSON.stringify(parsed.data.metadata).slice(0, 500);
+    } catch {
+      metadata = null;
+    }
+  }
+
   try {
     await recordStoreEvent({
       storeId: store.id,
-      productId: parsed.data.productId,
+      productId,
       eventType: parsed.data.eventType,
-      visitorId: parsed.data.visitorId,
-      metadata: parsed.data.metadata
-        ? JSON.stringify(parsed.data.metadata).slice(0, 500)
-        : null,
+      visitorId: parsed.data.visitorId?.slice(0, 64),
+      metadata,
     });
   } catch {
-    /* soft-fail */
+    /* non-blocking */
   }
   return NextResponse.json({ ok: true });
 }

@@ -3,6 +3,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatNgn } from "@/lib/money";
 import type { SellerAnalytics } from "@/lib/analytics-math";
+type ConversionMetrics = {
+  storeViews: number;
+  productViews: number;
+  addToCart: number;
+  checkoutStarts: number;
+  purchases: number;
+  wishlistAdds: number;
+  shares: number;
+  conversionRate: number | null;
+  productToCartRate: number | null;
+  cartToCheckoutRate: number | null;
+};
 import { ANALYTICS_PERIODS } from "@/lib/analytics-math";
 
 function formatPct(value: number | null): string {
@@ -89,6 +101,7 @@ function MiniBarChart({
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState<number>(30);
   const [data, setData] = useState<SellerAnalytics | null>(null);
+  const [conversion, setConversion] = useState<ConversionMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,9 +134,15 @@ export default function AnalyticsPage() {
         return;
       }
       setData(body.analytics as SellerAnalytics);
+      setConversion(
+        body.conversion && typeof body.conversion === "object"
+          ? (body.conversion as ConversionMetrics)
+          : null
+      );
     } catch {
       setError("Network error. Check your connection and try again.");
       setData(null);
+      setConversion(null);
     } finally {
       setLoading(false);
     }
@@ -253,6 +272,44 @@ export default function AnalyticsPage() {
               </div>
             ))}
           </div>
+
+          {conversion ? (
+            <section className="rounded-xl border border-ink-100 bg-white p-4">
+              <h2 className="text-sm font-semibold text-ink-900">
+                Conversion funnel
+              </h2>
+              <p className="text-xs text-ink-400">
+                From storefront events · last {period} days
+              </p>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { label: "Store views", value: conversion.storeViews },
+                  { label: "Product views", value: conversion.productViews },
+                  { label: "Add to cart", value: conversion.addToCart },
+                  { label: "Checkout starts", value: conversion.checkoutStarts },
+                  { label: "Purchases", value: conversion.purchases },
+                  { label: "Wishlist adds", value: conversion.wishlistAdds },
+                  { label: "Shares", value: conversion.shares },
+                  {
+                    label: "Conv. rate",
+                    value:
+                      conversion.conversionRate == null
+                        ? "—"
+                        : `${(conversion.conversionRate * 100).toFixed(1)}%`,
+                  },
+                ].map((c) => (
+                  <div key={c.label}>
+                    <p className="text-[11px] uppercase tracking-wide text-ink-400">
+                      {c.label}
+                    </p>
+                    <p className="mt-0.5 text-base font-semibold tabular-nums text-ink-950">
+                      {c.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-xl border border-ink-100 bg-white p-4">

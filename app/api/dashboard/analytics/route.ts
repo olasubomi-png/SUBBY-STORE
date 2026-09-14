@@ -4,6 +4,7 @@ import {
   getSellerAnalytics,
   resolveAnalyticsPeriod,
 } from "@/lib/server/analytics";
+import { getConversionMetrics } from "@/lib/server/conversion-analytics";
 
 export async function GET(req: Request) {
   const session = await getSession();
@@ -14,8 +15,11 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const period = resolveAnalyticsPeriod(url.searchParams.get("period"));
-    const analytics = await getSellerAnalytics(session.userId, period);
-    return NextResponse.json({ analytics });
+    const [analytics, conversion] = await Promise.all([
+      getSellerAnalytics(session.userId, period),
+      getConversionMetrics(session.userId, period),
+    ]);
+    return NextResponse.json({ analytics, conversion });
   } catch (error) {
     console.error("[Analytics] Failed to load", error);
     return NextResponse.json(
