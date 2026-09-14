@@ -389,39 +389,53 @@ export async function adjustProductStock(
     throw new Error("Stock cannot be negative");
   }
 
+  let updated;
   if (useMemory()) {
-    return mem.memAdjustProductStock(ownerId, productId, input);
+    updated = mem.memAdjustProductStock(ownerId, productId, input);
+  } else {
+    const db = getDb();
+    updated = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select()
+        .from(products)
+        .where(eq(products.id, productId))
+        .limit(1)
+        .for("update");
+      const product = rows[0];
+      if (!product) throw new Error("Product not found");
+      await getStoreOwned(product.storeId, ownerId);
+
+      let next = product.stock;
+      if (input.mode === "set") {
+        next = input.value;
+      } else {
+        next = product.stock + input.value;
+      }
+      if (next < 0) {
+        throw new Error("Stock cannot be negative");
+      }
+
+      const rows2 = await tx
+        .update(products)
+        .set({ stock: next, updatedAt: new Date() })
+        .where(eq(products.id, productId))
+        .returning();
+      return rows2[0];
+    });
   }
 
-  const db = getDb();
-  return db.transaction(async (tx) => {
-    const rows = await tx
-      .select()
-      .from(products)
-      .where(eq(products.id, productId))
-      .limit(1)
-      .for("update");
-    const product = rows[0];
-    if (!product) throw new Error("Product not found");
-    await getStoreOwned(product.storeId, ownerId);
-
-    let next = product.stock;
-    if (input.mode === "set") {
-      next = input.value;
-    } else {
-      next = product.stock + input.value;
-    }
-    if (next < 0) {
-      throw new Error("Stock cannot be negative");
-    }
-
-    const updated = await tx
-      .update(products)
-      .set({ stock: next, updatedAt: new Date() })
-      .where(eq(products.id, productId))
-      .returning();
-    return updated[0];
-  });
+  try {
+    const { notifyStockLevel } = await import("@/lib/server/notifications");
+    await notifyStockLevel({
+      storeId: updated.storeId,
+      productId: updated.id,
+      productName: updated.name,
+      stock: updated.stock,
+    });
+  } catch {
+    /* non-blocking */
+  }
+  return updated;
 }
 
 /**
@@ -689,7 +703,21 @@ export async function createPendingOrder(input: {
   paymentReference: string;
   couponCode?: string;
 }) {
-  if (useMemory()) return await mem.memCreatePendingOrder(input);
+  if (useMemory()) {
+    const result = await mem.memCreatePendingOrder(input);
+    try {
+      const { notifyOrderCreated } = await import("@/lib/server/notifications");
+      await notifyOrderCreated({
+        id: result.order.id,
+        storeId: result.order.storeId,
+        customerName: result.order.customerName,
+        totalKobo: result.order.totalKobo,
+      });
+    } catch {
+      /* non-blocking */
+    }
+    return result;
+  }
 
   const db = getDb();
   const merged = mergeCartItems(input.items);
@@ -841,6 +869,19 @@ export async function createPendingOrder(input: {
     });
 
     return { order, cart };
+  }).then(async (result) => {
+    try {
+      const { notifyOrderCreated } = await import("@/lib/server/notifications");
+      await notifyOrderCreated({
+        id: result.order.id,
+        storeId: result.order.storeId,
+        customerName: result.order.customerName,
+        totalKobo: result.order.totalKobo,
+      });
+    } catch {
+      /* non-blocking */
+    }
+    return result;
   });
 }
 
@@ -868,6 +909,19 @@ export async function confirmPaidOrder(
       });
     } catch {
       /* non-blocking analytics */
+    }
+    try {
+      const { notifyPaymentConfirmed } = await import(
+        "@/lib/server/notifications"
+      );
+      await notifyPaymentConfirmed({
+        id: result.order.id,
+        storeId: result.order.storeId,
+        customerName: result.order.customerName,
+        totalKobo: result.order.totalKobo,
+      });
+    } catch {
+      /* non-blocking notifications */
     }
   }
   return result;

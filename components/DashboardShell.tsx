@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { NotificationBell } from "@/components/NotificationBell";
 
 const links = [
   { href: "/dashboard", label: "Overview" },
@@ -31,13 +32,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           <Link href="/dashboard" className="font-semibold text-ink-950">
             SUBBY STORE
           </Link>
-          <button
-            type="button"
-            onClick={logout}
-            className="text-sm text-ink-500 hover:text-ink-800"
-          >
-            Log out
-          </button>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <button
+              type="button"
+              onClick={logout}
+              className="text-sm text-ink-500 hover:text-ink-800"
+            >
+              Log out
+            </button>
+          </div>
         </div>
         <nav className="mx-auto flex max-w-5xl gap-1 overflow-x-auto px-2 pb-2">
           {links.map((l) => {

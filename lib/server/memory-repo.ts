@@ -1246,3 +1246,39 @@ export function memCountStoreEvents(
       e.createdAt >= since
   ).length;
 }
+
+export function memCreateNotification(input: {
+  storeId: number;
+  type: string;
+  title: string;
+  message: string;
+  relatedOrderId?: number | null;
+  relatedProductId?: number | null;
+  relatedCouponId?: number | null;
+  href?: string | null;
+  dedupeKey: string;
+}) {
+  if (
+    store.notifications.some(
+      (n) => n.storeId === input.storeId && n.dedupeKey === input.dedupeKey
+    )
+  ) {
+    return null;
+  }
+  const row = {
+    id: store.seq.notification++,
+    storeId: input.storeId,
+    type: input.type,
+    title: input.title.slice(0, 160),
+    message: input.message,
+    relatedOrderId: input.relatedOrderId ?? null,
+    relatedProductId: input.relatedProductId ?? null,
+    relatedCouponId: input.relatedCouponId ?? null,
+    href: input.href ?? null,
+    read: false,
+    dedupeKey: input.dedupeKey,
+    createdAt: new Date(),
+  };
+  store.notifications.push(row);
+  return row;
+}

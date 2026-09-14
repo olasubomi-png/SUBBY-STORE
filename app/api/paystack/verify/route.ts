@@ -51,6 +51,19 @@ export async function GET(req: Request) {
     const verified = await verifyPaystackTransaction(reference);
 
     if (verified.status !== "success") {
+      try {
+        const { notifyPaymentFailed } = await import(
+          "@/lib/server/notifications"
+        );
+        await notifyPaymentFailed({
+          storeId: order.storeId,
+          reference,
+          orderId: order.id,
+          reason: `Payment status: ${verified.status}`,
+        });
+      } catch {
+        /* non-blocking */
+      }
       return NextResponse.json(
         { error: "Payment not successful", status: verified.status },
         { status: 400 }

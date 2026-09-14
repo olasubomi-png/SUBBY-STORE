@@ -274,3 +274,30 @@ export const storeEvents = pgTable(
     index("store_events_product_idx").on(t.productId),
   ]
 );
+
+/** In-dashboard seller notifications (private to store owner). */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    type: varchar("type", { length: 40 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    message: text("message").notNull(),
+    relatedOrderId: integer("related_order_id"),
+    relatedProductId: integer("related_product_id"),
+    relatedCouponId: integer("related_coupon_id"),
+    href: varchar("href", { length: 255 }),
+    read: boolean("read").default(false).notNull(),
+    dedupeKey: varchar("dedupe_key", { length: 160 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("notifications_store_idx").on(t.storeId),
+    index("notifications_store_unread_idx").on(t.storeId, t.read),
+    index("notifications_created_idx").on(t.createdAt),
+    uniqueIndex("notifications_dedupe_uidx").on(t.storeId, t.dedupeKey),
+  ]
+);
