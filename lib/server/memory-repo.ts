@@ -311,6 +311,7 @@ function memCreatePendingOrderUnlocked(input: {
     customerEmail: input.customerEmail.toLowerCase().trim(),
     deliveryAddress: input.deliveryAddress.trim(),
     note: input.note?.trim() || "",
+    sellerNote: "",
     subtotalKobo: cart.subtotalKobo,
     discountKobo,
     couponCode,

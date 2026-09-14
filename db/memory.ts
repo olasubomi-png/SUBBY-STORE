@@ -65,6 +65,7 @@ export type MemoryStore = {
     customerEmail: string;
     deliveryAddress: string;
     note: string;
+    sellerNote: string;
     subtotalKobo: number;
     discountKobo: number;
     couponCode: string | null;

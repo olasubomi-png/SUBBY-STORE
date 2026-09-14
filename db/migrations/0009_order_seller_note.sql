@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "seller_note" text DEFAULT '' NOT NULL;

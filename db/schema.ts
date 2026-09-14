@@ -100,6 +100,8 @@ export const orders = pgTable(
     customerEmail: varchar("customer_email", { length: 255 }).notNull(),
     deliveryAddress: text("delivery_address").notNull(),
     note: text("note").default("").notNull(),
+    /** Seller-only internal note (never shown on public storefront) */
+    sellerNote: text("seller_note").default("").notNull(),
     /** Subtotal and total in kobo */
     subtotalKobo: integer("subtotal_kobo").notNull(),
     /** Discount applied at checkout (kobo snapshot) */

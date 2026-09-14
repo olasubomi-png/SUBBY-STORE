@@ -834,6 +834,7 @@ export async function createPendingOrder(input: {
         customerEmail: input.customerEmail.toLowerCase().trim(),
         deliveryAddress: input.deliveryAddress.trim(),
         note: input.note?.trim() || "",
+        sellerNote: "",
         subtotalKobo: cart.subtotalKobo,
         discountKobo: cart.discountKobo ?? 0,
         couponCode: couponCode,
@@ -1346,56 +1347,11 @@ export async function updateOrderStatus(
   orderId: number,
   orderStatus: string
 ) {
-  // Fulfillment transitions sellers may apply. refund_required is terminal
-  // until a dedicated refund-resolution feature is added.
-  const fulfillmentStatuses = [
-    "pending",
-    "confirmed",
-    "processing",
-    "shipped",
-    "delivered",
-    "cancelled",
-  ] as const;
-
-  if (!(fulfillmentStatuses as readonly string[]).includes(orderStatus)) {
-    throw new Error("Invalid order status");
-  }
-
-  if (useMemory()) {
-    const order = mem.getMemoryStore().orders.find((o) => o.id === orderId);
-    if (!order) throw new Error("Order not found");
-    mem.memGetStoreForOwner(order.storeId, ownerId);
-    if (order.orderStatus === "refund_required") {
-      throw new Error(
-        "Order requires a refund and cannot be moved to fulfillment statuses"
-      );
-    }
-    order.orderStatus = orderStatus;
-    order.updatedAt = new Date();
-    return order;
-  }
-
-  const db = getDb();
-  const rows = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (!rows[0]) throw new Error("Order not found");
-  await getStoreOwned(rows[0].storeId, ownerId);
-
-  if (rows[0].orderStatus === "refund_required") {
-    throw new Error(
-      "Order requires a refund and cannot be moved to fulfillment statuses"
-    );
-  }
-
-  const updated = await db
-    .update(orders)
-    .set({ orderStatus, updatedAt: new Date() })
-    .where(eq(orders.id, orderId))
-    .returning();
-  return updated[0];
+  // Delegate to transition-safe fulfillment updater (stock release on cancel).
+  const { updateFulfillmentStatus } = await import(
+    "@/lib/server/order-management"
+  );
+  return updateFulfillmentStatus(ownerId, orderId, orderStatus);
 }
 
 export async function dashboardStats(ownerId: number) {
