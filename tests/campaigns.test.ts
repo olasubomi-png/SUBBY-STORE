@@ -6,19 +6,37 @@ import {
 } from "@/lib/server/campaigns";
 import { createCoupon } from "@/lib/server/coupons";
 import { canTransition as statusCanTransition } from "@/lib/campaigns/types";
+import {
+  seedMemoryPlans, ensureStoreSubscription, startSubscriptionCheckout, confirmSubscriptionPayment,
+} from "@/lib/server/subscriptions";
 
 beforeEach(() => {
   resetMemoryStore();
   process.env.USE_MEMORY_DB = "1";
+  process.env.PAYSTACK_MODE = "mock";
   (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
+  seedMemoryPlans();
 });
 afterEach(() => resetMemoryStore());
+
+
+async function grantPro(ownerId: number, storeId: number, email: string) {
+  await ensureStoreSubscription(storeId);
+  const checkout = await startSubscriptionCheckout({ ownerId, storeId, planSlug: "pro", email });
+  if (checkout.kind === "checkout") {
+    await confirmSubscriptionPayment({
+      reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: `evt_${checkout.reference}`,
+    });
+  }
+}
 
 async function seed() {
   const user = await memSignup({ email: `mkt-${Math.random().toString(16).slice(2)}@ex.com`, password: "password12", fullName: "Seller" });
   const other = await memSignup({ email: `mkt-o-${Math.random().toString(16).slice(2)}@ex.com`, password: "password12", fullName: "Other" });
   const shop = memCreateStore({ ownerId: user.id, name: `Market Shop ${Math.random().toString(16).slice(2, 8)}` });
   const otherShop = memCreateStore({ ownerId: other.id, name: `Other Shop ${Math.random().toString(16).slice(2, 8)}` });
+  await grantPro(user.id, shop.id, user.email);
+  await grantPro(other.id, otherShop.id, other.email);
   memCreateProduct({ ownerId: user.id, storeId: shop.id, name: "Promo Item", priceKobo: 500_000, stock: 10 });
   return { user, other, shop, otherShop };
 }

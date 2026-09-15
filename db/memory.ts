@@ -167,38 +167,45 @@ export type MemoryStore = {
     campaignId: number;
     productId: number;
   }>;
+  subscriptionPlans: Array<{
+    id: number; name: string; slug: string; description: string; priceKobo: number;
+    billingInterval: string; productLimit: number | null; featuresJson: string;
+    active: boolean; sortOrder: number; createdAt: Date; updatedAt: Date;
+  }>;
+  subscriptions: Array<{
+    id: number; storeId: number; planId: number; status: string; provider: string;
+    providerSubscriptionCode: string | null; providerCustomerCode: string | null;
+    currentPeriodStart: Date | null; currentPeriodEnd: Date | null;
+    cancelAtPeriodEnd: boolean; canceledAt: Date | null; createdAt: Date; updatedAt: Date;
+  }>;
+  billingTransactions: Array<{
+    id: number; storeId: number; subscriptionId: number | null; provider: string;
+    reference: string; amountKobo: number; currency: string; status: string;
+    transactionType: string; planId: number | null; rawEventId: string | null;
+    createdAt: Date; updatedAt: Date;
+  }>;
+  subscriptionEvents: Array<{
+    id: number; subscriptionId: number; eventType: string; providerEventId: string | null;
+    metadata: string | null; processedAt: Date; createdAt: Date;
+  }>;
   seq: {
-    user: number;
-    store: number;
-    product: number;
-    order: number;
-    item: number;
-    coupon: number;
-    couponProduct: number;
-    payment: number;
-    productImage: number;
-    storeEvent: number;
-    notification: number;
-    campaign: number;
-    campaignProduct: number;
+    user: number; store: number; product: number; order: number; item: number;
+    coupon: number; couponProduct: number; payment: number; productImage: number;
+    storeEvent: number; notification: number; campaign: number; campaignProduct: number;
+    subscriptionPlan: number; subscription: number; billingTransaction: number; subscriptionEvent: number;
   };
 };
 
 export function createMemoryStore(): MemoryStore {
   return {
-    users: [],
-    stores: [],
-    products: [],
-    orders: [],
-    orderItems: [],
-    payments: [],
-    productImages: [],
-    coupons: [],
-    storeEvents: [],
-    notifications: [],
-    couponProducts: [],
-    campaigns: [],
-    campaignProducts: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1, campaign: 1, campaignProduct: 1 },
+    users: [], stores: [], products: [], orders: [], orderItems: [], payments: [],
+    productImages: [], coupons: [], storeEvents: [], notifications: [], couponProducts: [],
+    campaigns: [], campaignProducts: [], subscriptionPlans: [], subscriptions: [],
+    billingTransactions: [], subscriptionEvents: [],
+    seq: {
+      user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1,
+      coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1, campaign: 1, campaignProduct: 1,
+      subscriptionPlan: 1, subscription: 1, billingTransaction: 1, subscriptionEvent: 1,
+    },
   };
 }

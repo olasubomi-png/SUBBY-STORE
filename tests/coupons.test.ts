@@ -15,13 +15,29 @@ import {
   listCouponsForOwner,
 } from "@/lib/server/coupons";
 import { createPendingOrder } from "@/lib/server/repo";
+import {
+  seedMemoryPlans, ensureStoreSubscription, startSubscriptionCheckout, confirmSubscriptionPayment,
+} from "@/lib/server/subscriptions";
 
 beforeEach(() => {
   resetMemoryStore();
   process.env.USE_MEMORY_DB = "1";
+  process.env.PAYSTACK_MODE = "mock";
   (process.env as { NODE_ENV?: string }).NODE_ENV = "test";
+  seedMemoryPlans();
 });
 afterEach(() => resetMemoryStore());
+
+
+async function grantPro(ownerId: number, storeId: number, email: string) {
+  await ensureStoreSubscription(storeId);
+  const checkout = await startSubscriptionCheckout({ ownerId, storeId, planSlug: "pro", email });
+  if (checkout.kind === "checkout") {
+    await confirmSubscriptionPayment({
+      reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: `evt_${checkout.reference}`,
+    });
+  }
+}
 
 async function seed() {
   const user = await memSignup({
@@ -33,6 +49,7 @@ async function seed() {
     ownerId: user.id,
     name: `Coupon Shop ${Math.random().toString(16).slice(2, 8)}`,
   });
+  await grantPro(user.id, shop.id, user.email);
   const p1 = memCreateProduct({
     ownerId: user.id,
     storeId: shop.id,

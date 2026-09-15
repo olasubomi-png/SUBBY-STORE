@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { verifyPaystackWebhookSignature } from "@/lib/server/paystack";
-import {
-  confirmPaidOrder,
-  getOrderByReference,
-} from "@/lib/server/repo";
+import { confirmPaidOrder, getOrderByReference } from "@/lib/server/repo";
 import { assertProductionConfig } from "@/lib/server/config";
+import { confirmSubscriptionPayment } from "@/lib/server/subscriptions";
 
 export async function POST(req: Request) {
   try {
@@ -31,6 +29,7 @@ export async function POST(req: Request) {
         amount?: number;
         currency?: string;
         status?: string;
+        metadata?: { purpose?: string };
       };
     };
 
@@ -42,28 +41,52 @@ export async function POST(req: Request) {
     const amount = event.data?.amount;
     const currency = event.data?.currency;
     const rawEventId =
-      event.id != null
-        ? String(event.id)
-        : event.data?.id != null
-          ? String(event.data.id)
-          : null;
+      event.id != null ? String(event.id) : event.data?.id != null ? String(event.data.id) : null;
 
     if (!reference || typeof amount !== "number") {
       return NextResponse.json({ error: "malformed" }, { status: 400 });
     }
 
+    const isSubscription =
+      reference.startsWith("sub_") || event.data?.metadata?.purpose === "subscription";
+
+    if (isSubscription) {
+      try {
+        const result = await confirmSubscriptionPayment({
+          reference, amountKobo: amount, currency, rawEventId,
+        });
+        return NextResponse.json({
+          ok: true, type: "subscription", alreadyProcessed: result.alreadyProcessed,
+          plan: result.plan.slug, status: result.subscription.status,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "subscription_webhook_failed";
+        if (msg === "unknown_reference") {
+          return NextResponse.json({ ok: true, unknown_reference: true });
+        }
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
+    }
+
     const order = await getOrderByReference(reference);
     if (!order) {
-      return NextResponse.json({ ok: true, unknown_reference: true });
+      try {
+        const result = await confirmSubscriptionPayment({
+          reference, amountKobo: amount, currency, rawEventId,
+        });
+        return NextResponse.json({
+          ok: true, type: "subscription", alreadyProcessed: result.alreadyProcessed,
+          plan: result.plan.slug, status: result.subscription.status,
+        });
+      } catch {
+        return NextResponse.json({ ok: true, unknown_reference: true });
+      }
     }
 
     if (order.paymentStatus === "paid") {
       return NextResponse.json({
-        ok: true,
-        alreadyPaid: true,
-        orderId: order.id,
-        paymentStatus: order.paymentStatus,
-        orderStatus: order.orderStatus,
+        ok: true, alreadyPaid: true, orderId: order.id,
+        paymentStatus: order.paymentStatus, orderStatus: order.orderStatus,
         refundRequired: order.orderStatus === "refund_required",
       });
     }
@@ -78,11 +101,8 @@ export async function POST(req: Request) {
 
     const result = await confirmPaidOrder(reference, amount, rawEventId);
     return NextResponse.json({
-      ok: true,
-      alreadyPaid: result.alreadyPaid,
-      orderId: result.order.id,
-      paymentStatus: result.order.paymentStatus,
-      orderStatus: result.order.orderStatus,
+      ok: true, alreadyPaid: result.alreadyPaid, orderId: result.order.id,
+      paymentStatus: result.order.paymentStatus, orderStatus: result.order.orderStatus,
       refundRequired: Boolean(result.refundRequired),
     });
   } catch (e) {

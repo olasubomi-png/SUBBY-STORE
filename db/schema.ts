@@ -345,3 +345,93 @@ export const campaignProducts = pgTable(
     index("campaign_products_product_idx").on(t.productId),
   ]
 );
+
+
+/** Configurable seller subscription plans (prices in kobo). */
+export const subscriptionPlans = pgTable(
+  "subscription_plans",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 80 }).notNull(),
+    slug: varchar("slug", { length: 40 }).notNull(),
+    description: text("description").default("").notNull(),
+    priceKobo: integer("price_kobo").notNull(),
+    billingInterval: varchar("billing_interval", { length: 20 }).notNull().default("monthly"),
+    productLimit: integer("product_limit"),
+    featuresJson: text("features_json").default("{}").notNull(),
+    active: boolean("active").default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("subscription_plans_slug_uidx").on(t.slug),
+    index("subscription_plans_active_idx").on(t.active),
+  ]
+);
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+    planId: integer("plan_id").notNull().references(() => subscriptionPlans.id, { onDelete: "restrict" }),
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    provider: varchar("provider", { length: 40 }).default("paystack").notNull(),
+    providerSubscriptionCode: varchar("provider_subscription_code", { length: 120 }),
+    providerCustomerCode: varchar("provider_customer_code", { length: 120 }),
+    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("subscriptions_store_idx").on(t.storeId),
+    index("subscriptions_status_idx").on(t.status),
+    uniqueIndex("subscriptions_store_uidx").on(t.storeId),
+  ]
+);
+
+export const billingTransactions = pgTable(
+  "billing_transactions",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+    subscriptionId: integer("subscription_id").references(() => subscriptions.id, { onDelete: "set null" }),
+    provider: varchar("provider", { length: 40 }).default("paystack").notNull(),
+    reference: varchar("reference", { length: 120 }).notNull(),
+    amountKobo: integer("amount_kobo").notNull(),
+    currency: varchar("currency", { length: 3 }).default("NGN").notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    transactionType: varchar("transaction_type", { length: 40 }).notNull(),
+    planId: integer("plan_id").references(() => subscriptionPlans.id, { onDelete: "set null" }),
+    rawEventId: varchar("raw_event_id", { length: 160 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("billing_transactions_reference_uidx").on(t.reference),
+    uniqueIndex("billing_transactions_raw_event_uidx").on(t.rawEventId),
+    index("billing_transactions_store_idx").on(t.storeId),
+    index("billing_transactions_subscription_idx").on(t.subscriptionId),
+  ]
+);
+
+export const subscriptionEvents = pgTable(
+  "subscription_events",
+  {
+    id: serial("id").primaryKey(),
+    subscriptionId: integer("subscription_id").notNull().references(() => subscriptions.id, { onDelete: "cascade" }),
+    eventType: varchar("event_type", { length: 60 }).notNull(),
+    providerEventId: varchar("provider_event_id", { length: 160 }),
+    metadata: text("metadata"),
+    processedAt: timestamp("processed_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("subscription_events_sub_idx").on(t.subscriptionId),
+    uniqueIndex("subscription_events_provider_uidx").on(t.providerEventId),
+  ]
+);

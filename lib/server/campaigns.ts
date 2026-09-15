@@ -12,6 +12,7 @@ import {
   type CampaignRow, type CampaignStatus, type CampaignType, type PublicCampaign,
 } from "@/lib/campaigns/types";
 import { createNotification } from "@/lib/server/notifications";
+import { canUseCampaigns } from "@/lib/server/entitlements";
 
 const NAME_MAX = 120, DESC_MAX = 2000, ANNOUNCE_MAX = 500, SLUG_MAX = 100;
 
@@ -177,6 +178,10 @@ export async function createCampaign(ownerId: number, input: {
   const name = trimStr(input.name, NAME_MAX);
   if (name.length < 2) throw new Error("Campaign name is required");
   if (!isCampaignType(input.campaignType)) throw new Error("Invalid campaign type");
+  {
+    const ent = await canUseCampaigns(input.storeId);
+    if (!ent.allowed) throw new Error(ent.message);
+  }
   const status: CampaignStatus = input.status && isCampaignStatus(input.status) ? input.status : "draft";
   if (status === "expired") throw new Error("Cannot create an expired campaign");
   const startsAt = parseOptionalDate(input.startsAt ?? null);

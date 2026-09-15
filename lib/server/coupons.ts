@@ -1,3 +1,4 @@
+import { canUseCoupons } from "@/lib/server/entitlements";
 /**
  * Coupon CRUD + validation (Postgres + memory).
  */
@@ -109,6 +110,10 @@ export async function createCoupon(
   }
 ) {
   await assertStoreOwned(input.storeId, ownerId);
+  {
+    const ent = await canUseCoupons(input.storeId);
+    if (!ent.allowed) throw new Error(ent.message);
+  }
   const code = normalizeCouponCode(input.code);
   if (code.length < 2) throw new Error("Invalid coupon code");
   assertCouponValue(

@@ -28,6 +28,7 @@ import {
   validateCouponForCart,
   releaseCouponUsage,
 } from "@/lib/server/coupons";
+import { canCreateProduct } from "@/lib/server/entitlements";
 
 export function useMemory(): boolean {
   if (isProduction()) {
@@ -234,6 +235,8 @@ export async function createProduct(input: {
   /** Full gallery (primary first). When set, overrides single imageUrl for gallery rows. */
   imageUrls?: string[];
 }) {
+  const entitlement = await canCreateProduct(input.storeId);
+  if (!entitlement.allowed) throw new Error(entitlement.message);
   const gallery = normalizeGalleryUrls(input.imageUrls, input.imageUrl);
   if (useMemory()) {
     const product = mem.memCreateProduct({
