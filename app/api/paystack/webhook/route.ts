@@ -78,7 +78,8 @@ export async function POST(req: Request) {
           msg === "withdrawal_not_found" ||
           msg.startsWith("cannot_complete_") ||
           msg === "cannot_fail_successful_withdrawal" ||
-          msg === "can_only_reverse_success"
+          msg === "can_only_reverse_success" ||
+          msg.startsWith("illegal_withdrawal_transition")
         ) {
           return NextResponse.json({ ok: true, ignored_transition: true, reason: msg });
         }

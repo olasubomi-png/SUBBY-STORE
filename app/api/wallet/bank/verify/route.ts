@@ -6,6 +6,11 @@ const schema = z.object({ bankCode: z.string().min(2).max(20), bankName: z.strin
 export async function POST(req: Request) {
   const resolved = await resolveSellerStores(null);
   if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: resolved.status });
+  const { checkRateLimit } = await import("@/lib/server/rate-limit");
+  const rl = checkRateLimit(`wallet:bank:${resolved.session.userId}`, 10, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
+  }
   let body: unknown;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }
   const parsed = schema.safeParse(body);

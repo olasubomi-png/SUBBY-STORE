@@ -11,6 +11,7 @@ import {
   listPaystackBanks, resolvePaystackAccount, createPaystackTransferRecipient, initiatePaystackTransfer,
   verifyPaystackTransfer, isDefinitiveTransferRejection,
 } from "@/lib/server/paystack";
+import { assertWithdrawalTransition } from "@/lib/server/wallet-state-machine";
 
 async function softNotifyWithdrawal(
   kind: "requested" | "succeeded" | "failed" | "reversed",
@@ -346,7 +347,7 @@ export async function completeWithdrawal(input: { reference: string; transferCod
     const widx = ms.withdrawals.findIndex((w) => w.reference === input.reference);
     if (widx < 0) throw new Error("withdrawal_not_found");
     if (ms.withdrawals[widx]!.status === "success") return { alreadyProcessed: true, withdrawal: ms.withdrawals[widx]! };
-    if (ms.withdrawals[widx]!.status === "failed") throw new Error("cannot_complete_failed_withdrawal");
+    assertWithdrawalTransition(ms.withdrawals[widx]!.status, "success");
     const amount = ms.withdrawals[widx]!.amountKobo;
     ms.withdrawals[widx] = { ...ms.withdrawals[widx]!, status: "success", transferCode: input.transferCode || ms.withdrawals[widx]!.transferCode, completedAt: new Date(), providerEventId: input.providerEventId ?? null, updatedAt: new Date() };
     const sidx = ms.sellerWallets.findIndex((w) => w.storeId === ms.withdrawals[widx]!.storeId);
@@ -368,7 +369,7 @@ export async function completeWithdrawal(input: { reference: string; transferCod
     const wd = rows[0];
     if (!wd) throw new Error("withdrawal_not_found");
     if (wd.status === "success") return { alreadyProcessed: true, withdrawal: wd };
-    if (wd.status === "failed" || wd.status === "reversed") throw new Error(`cannot_complete_${wd.status}_withdrawal`);
+    assertWithdrawalTransition(wd.status, "success");
     await tx.update(withdrawals).set({ status: "success", transferCode: input.transferCode || wd.transferCode, completedAt: new Date(), providerEventId: input.providerEventId ?? null, updatedAt: new Date() }).where(eq(withdrawals.id, wd.id));
     const locked = await tx.select().from(sellerWallets).where(eq(sellerWallets.id, wd.walletId)).limit(1).for("update");
     const w = locked[0]!;
@@ -387,7 +388,7 @@ export async function failWithdrawal(input: { reference: string; reason?: string
     const wd = ms.withdrawals.find((w) => w.reference === input.reference);
     if (!wd) throw new Error("withdrawal_not_found");
     if (wd.status === "failed") return { alreadyProcessed: true, withdrawal: wd };
-    if (wd.status === "success" || wd.status === "reversed") throw new Error("cannot_fail_successful_withdrawal");
+    assertWithdrawalTransition(wd.status, "failed");
     await releaseHoldMem(wd.storeId, wd.id, input.reference, wd.amountKobo, input.reason || "Transfer failed");
     return { alreadyProcessed: false, withdrawal: ms.withdrawals.find((w) => w.id === wd.id)! };
   }
@@ -395,7 +396,7 @@ export async function failWithdrawal(input: { reference: string; reason?: string
   const wd = rows[0];
   if (!wd) throw new Error("withdrawal_not_found");
   if (wd.status === "failed") return { alreadyProcessed: true, withdrawal: wd };
-  if (wd.status === "success") throw new Error("cannot_fail_successful_withdrawal");
+  assertWithdrawalTransition(wd.status, "failed");
   const key = `withdrawal_release:${input.reference}`;
   await getDb().transaction(async (tx) => {
     const existing = await tx.select().from(walletLedger).where(eq(walletLedger.idempotencyKey, key)).limit(1);
@@ -441,7 +442,7 @@ export async function reverseWithdrawal(input: { reference: string; providerEven
     const wd = rows[0];
     if (!wd) throw new Error("withdrawal_not_found");
     if (wd.status === "reversed") return { alreadyProcessed: true, withdrawal: wd };
-    if (wd.status !== "success") throw new Error("can_only_reverse_success");
+    assertWithdrawalTransition(wd.status, "reversed");
     await tx.update(withdrawals).set({ status: "reversed", reversedAt: new Date(), updatedAt: new Date() }).where(eq(withdrawals.id, wd.id));
     const locked = await tx.select().from(sellerWallets).where(eq(sellerWallets.id, wd.walletId)).limit(1).for("update");
     const w = locked[0]!;

@@ -161,7 +161,7 @@ describe("withdrawal lifecycle", () => {
     const r2 = await completeWithdrawal({ reference: withdrawal.reference, providerEventId: "evt_dup1" });
     expect(r1.alreadyProcessed).toBe(false);
     expect(r2.alreadyProcessed).toBe(true);
-    await expect(failWithdrawal({ reference: withdrawal.reference })).rejects.toThrow(/cannot_fail_successful/);
+    await expect(failWithdrawal({ reference: withdrawal.reference })).rejects.toThrow(/cannot_fail_successful|illegal_withdrawal_transition/);
   });
 
   it("reversal restores available once", async () => {

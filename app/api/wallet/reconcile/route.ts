@@ -7,6 +7,11 @@ import { runStoreReconciliation, sellerVerifyWithdrawal } from "@/lib/server/wal
 export async function POST(req: Request) {
   const resolved = await resolveSellerStores(null);
   if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: resolved.status });
+  const { checkRateLimit } = await import("@/lib/server/rate-limit");
+  const rl = checkRateLimit(`wallet:reconcile:${resolved.session.userId}`, 10, 60000);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
+  }
   let body: unknown = {};
   try {
     body = await req.json();
