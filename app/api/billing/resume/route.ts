@@ -8,11 +8,26 @@ export async function POST() {
     return NextResponse.json({ error: resolved.error }, { status: resolved.status });
   }
   try {
-    const sub = await resumeSubscription({
-      ownerId: resolved.session.userId, storeId: resolved.primary.id,
+    const result = await resumeSubscription({
+      ownerId: resolved.session.userId,
+      storeId: resolved.primary.id,
     });
-    return NextResponse.json({ status: sub.status, cancelAtPeriodEnd: sub.cancelAtPeriodEnd });
+    const sub = result.subscription;
+    return NextResponse.json({
+      status: sub.status,
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+      providerOk: result.providerOk,
+      providerError: result.providerError,
+      message: !result.localUpdated
+        ? "Subscription was already active."
+        : result.providerOk
+          ? "Subscription resumed. Automatic renewal is on."
+          : "Resumed locally, but Paystack could not re-enable automatic renewal. You may need to upgrade again before the period ends.",
+    });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Resume failed" }, { status: 400 });
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Resume failed" },
+      { status: 400 }
+    );
   }
 }

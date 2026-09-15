@@ -34,6 +34,18 @@ async function seedSeller() {
   return { user, shop };
 }
 
+
+async function forcePeriodNearEnd(shopId: number, hoursAgo = 1) {
+  const { getMemoryStore } = await import("@/lib/server/memory-repo");
+  const ms = getMemoryStore();
+  const sub = await getStoreSubscription(shopId);
+  const idx = ms.subscriptions.findIndex((s) => s.id === sub!.id);
+  ms.subscriptions[idx] = {
+    ...ms.subscriptions[idx]!,
+    currentPeriodEnd: new Date(Date.now() - hoursAgo * 3600000),
+  };
+}
+
 async function activatePro(user: { id: number; email: string }, shopId: number) {
   await ensureStoreSubscription(shopId);
   const checkout = await startSubscriptionCheckout({
@@ -153,6 +165,7 @@ describe("renewal", () => {
   it("marks past_due on failed renewal", async () => {
     const { user, shop } = await seedSeller();
     await activatePro(user, shop.id);
+    await forcePeriodNearEnd(shop.id);
     const result = await markSubscriptionPastDue({
       subscriptionCode: `SUB_${shop.id}`,
       rawEventId: "evt_fail_1",
@@ -170,10 +183,11 @@ describe("cancel and resume", () => {
     const canceled = await cancelSubscription({
       ownerId: user.id, storeId: shop.id, immediate: false,
     });
-    expect(canceled.cancelAtPeriodEnd).toBe(true);
+    expect(canceled.subscription.cancelAtPeriodEnd).toBe(true);
+    expect(canceled.localUpdated).toBe(true);
     expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
     const resumed = await resumeSubscription({ ownerId: user.id, storeId: shop.id });
-    expect(resumed.cancelAtPeriodEnd).toBe(false);
+    expect(resumed.subscription.cancelAtPeriodEnd).toBe(false);
   });
 
   it("immediate cancel switches to free without deleting products", async () => {
@@ -276,6 +290,7 @@ describe("failed payment stays past_due with grace", () => {
   it("duplicate failed event is idempotent", async () => {
     const { user, shop } = await seedSeller();
     await activatePro(user, shop.id);
+    await forcePeriodNearEnd(shop.id);
     const a = await markSubscriptionPastDue({
       subscriptionCode: `SUB_${shop.id}`,
       rawEventId: "evt_fail_dup",
@@ -287,6 +302,52 @@ describe("failed payment stays past_due with grace", () => {
     });
     expect(b?.status).toBe("past_due");
     expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+  });
+});
+
+
+describe("past_due recovery and stale failure", () => {
+  it("renewal restores past_due to active", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    await forcePeriodNearEnd(shop.id);
+    await markSubscriptionPastDue({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_fail_then_ok",
+    });
+    expect((await getStoreSubscription(shop.id))?.status).toBe("past_due");
+    const next = new Date(Date.now() + 30 * 86400000).toISOString();
+    const ren = await confirmRenewalPayment({
+      reference: `ren_recover_${shop.id}`,
+      amountKobo: 500_000,
+      rawEventId: "evt_ren_recover",
+      subscriptionCode: `SUB_${shop.id}`,
+      customerCode: `CUS_${shop.id}`,
+      nextPaymentDate: next,
+    });
+    expect(ren.subscription.status).toBe("active");
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+  });
+
+  it("ignores delayed payment_failed after successful long period renewal", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    // Period far in the future
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const ms = getMemoryStore();
+    const sub = await getStoreSubscription(shop.id);
+    const idx = ms.subscriptions.findIndex((s) => s.id === sub!.id);
+    ms.subscriptions[idx] = {
+      ...ms.subscriptions[idx]!,
+      status: "active",
+      currentPeriodEnd: new Date(Date.now() + 20 * 86400000),
+    };
+    const result = await markSubscriptionPastDue({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_stale_fail",
+    });
+    expect(result?.status).toBe("active");
+    expect(result?.status).not.toBe("past_due");
   });
 });
 

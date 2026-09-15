@@ -329,17 +329,25 @@ export async function disablePaystackSubscription(
   subscriptionCode: string
 ): Promise<void> {
   if (isPaystackMock()) return;
-  const sub = await fetchPaystackSubscription(subscriptionCode);
-  if (!sub.emailToken) {
-    throw new Error("Unable to disable subscription: missing email token");
+  if (!subscriptionCode) throw new Error("Missing subscription code");
+  try {
+    const sub = await fetchPaystackSubscription(subscriptionCode);
+    if (!sub.emailToken) {
+      throw new Error("Unable to disable subscription: missing email token");
+    }
+    await paystackFetch("/subscription/disable", {
+      method: "POST",
+      body: JSON.stringify({
+        code: subscriptionCode,
+        token: sub.emailToken,
+      }),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "disable failed";
+    // Treat already-disabled as success for idempotent cancel
+    if (/already|not active|disabled/i.test(msg)) return;
+    throw new Error(`Paystack disable failed: ${msg}`);
   }
-  await paystackFetch("/subscription/disable", {
-    method: "POST",
-    body: JSON.stringify({
-      code: subscriptionCode,
-      token: sub.emailToken,
-    }),
-  });
 }
 
 /** Re-enable a previously disabled Paystack subscription when supported. */
@@ -347,17 +355,24 @@ export async function enablePaystackSubscription(
   subscriptionCode: string
 ): Promise<void> {
   if (isPaystackMock()) return;
-  const sub = await fetchPaystackSubscription(subscriptionCode);
-  if (!sub.emailToken) {
-    throw new Error("Unable to enable subscription: missing email token");
+  if (!subscriptionCode) throw new Error("Missing subscription code");
+  try {
+    const sub = await fetchPaystackSubscription(subscriptionCode);
+    if (!sub.emailToken) {
+      throw new Error("Unable to enable subscription: missing email token");
+    }
+    await paystackFetch("/subscription/enable", {
+      method: "POST",
+      body: JSON.stringify({
+        code: subscriptionCode,
+        token: sub.emailToken,
+      }),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "enable failed";
+    if (/already|active/i.test(msg) && !/not active/i.test(msg)) return;
+    throw new Error(`Paystack enable failed: ${msg}`);
   }
-  await paystackFetch("/subscription/enable", {
-    method: "POST",
-    body: JSON.stringify({
-      code: subscriptionCode,
-      token: sub.emailToken,
-    }),
-  });
 }
 
 export function verifyPaystackWebhookSignature(

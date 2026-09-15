@@ -665,9 +665,39 @@ async function resolveSubByProvider(input: {
   return sub;
 }
 
-function alreadyRecordedProviderEvent(providerEventId: string | null | undefined): boolean {
-  if (!providerEventId || !useMemory()) return false;
-  return mem.getMemoryStore().subscriptionEvents.some((e) => e.providerEventId === providerEventId);
+/**
+ * True if this Paystack/provider event id was already applied.
+ * Memory: in-memory scan. Postgres: unique subscription_events.provider_event_id.
+ */
+async function providerEventAlreadyProcessed(
+  providerEventId: string | null | undefined
+): Promise<boolean> {
+  if (!providerEventId) return false;
+  if (useMemory()) {
+    return mem
+      .getMemoryStore()
+      .subscriptionEvents.some((e) => e.providerEventId === providerEventId);
+  }
+  const rows = await getDb()
+    .select({ id: subscriptionEvents.id })
+    .from(subscriptionEvents)
+    .where(eq(subscriptionEvents.providerEventId, providerEventId))
+    .limit(1);
+  return Boolean(rows[0]);
+}
+
+/**
+ * Stale failure guard: if the subscription is already active with a period
+ * ending more than STALE_FAILURE_BUFFER_MS in the future, a delayed
+ * payment_failed is treated as obsolete (renewal already succeeded).
+ */
+/** Ignore delayed payment_failed only when period still has >7 days left (renewal already applied). */
+const STALE_FAILURE_BUFFER_MS = 7 * 24 * 60 * 60 * 1000;
+
+function isStalePaymentFailure(sub: SubscriptionRow, now = new Date()): boolean {
+  if (sub.status !== "active") return false;
+  if (!sub.currentPeriodEnd) return false;
+  return sub.currentPeriodEnd.getTime() > now.getTime() + STALE_FAILURE_BUFFER_MS;
 }
 
 /** Failed renewal payment → past_due (3-day grace), then expire via refresh. */
@@ -679,12 +709,20 @@ export async function markSubscriptionPastDue(input: {
   const sub = await resolveSubByProvider(input);
   if (!sub) return null;
 
-  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+  if (await providerEventAlreadyProcessed(input.rawEventId)) {
     return refreshSubscriptionStatus(sub);
   }
 
   if (sub.status === "past_due" || sub.status === "expired" || sub.status === "canceled") {
     await recordEvent(sub.id, "renewal_failed", input.rawEventId ?? null);
+    return refreshSubscriptionStatus(sub);
+  }
+
+  // Out-of-order: delayed failure after a successful renewal with future period
+  if (isStalePaymentFailure(sub)) {
+    await recordEvent(sub.id, "renewal_failed_ignored_stale", input.rawEventId ?? null, {
+      reason: "period_end_still_future",
+    });
     return refreshSubscriptionStatus(sub);
   }
 
@@ -705,7 +743,7 @@ export async function markSubscriptionNonRenewing(input: {
   const sub = await resolveSubByProvider(input);
   if (!sub) return null;
 
-  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+  if (await providerEventAlreadyProcessed(input.rawEventId)) {
     return refreshSubscriptionStatus(sub);
   }
 
@@ -735,7 +773,7 @@ export async function markSubscriptionDisabledByProvider(input: {
   const sub = await resolveSubByProvider(input);
   if (!sub) return null;
 
-  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+  if (await providerEventAlreadyProcessed(input.rawEventId)) {
     return refreshSubscriptionStatus(sub);
   }
 
@@ -774,53 +812,93 @@ export async function markSubscriptionDisabledByProvider(input: {
   return refreshSubscriptionStatus(updated);
 }
 
+export type CancelResumeResult = {
+  subscription: SubscriptionRow;
+  /** Whether Paystack disable/enable was attempted and succeeded */
+  providerOk: boolean;
+  /** Human-readable provider error if providerOk is false and a call was attempted */
+  providerError: string | null;
+  /** true when local state was updated even if provider call failed */
+  localUpdated: boolean;
+};
+
 export async function cancelSubscription(input: {
   ownerId: number; storeId: number; immediate?: boolean;
-}) {
+}): Promise<CancelResumeResult> {
   await assertStoreOwned(input.storeId, input.ownerId);
   const sub = await ensureStoreSubscription(input.storeId);
   const free = await getFreePlan();
 
-  if (input.immediate || !sub.currentPeriodEnd) {
-    if (sub.providerSubscriptionCode) {
-      try { await disablePaystackSubscription(sub.providerSubscriptionCode); } catch { /* best-effort */ }
+  let providerOk = true;
+  let providerError: string | null = null;
+
+  async function tryDisable(code: string | null) {
+    if (!code) return;
+    try {
+      await disablePaystackSubscription(code);
+      providerOk = true;
+      providerError = null;
+    } catch (e) {
+      providerOk = false;
+      providerError = e instanceof Error ? e.message : "Paystack disable failed";
     }
+  }
+
+  if (input.immediate || !sub.currentPeriodEnd) {
+    await tryDisable(sub.providerSubscriptionCode);
     const updated = await patchSubscription(sub.id, {
       planId: free.id, status: "canceled", cancelAtPeriodEnd: false,
       canceledAt: new Date(), currentPeriodEnd: new Date(),
       providerSubscriptionCode: null,
     });
-    await recordEvent(sub.id, "canceled_immediate", null);
-    return updated;
+    await recordEvent(sub.id, "canceled_immediate", null, {
+      providerOk, providerError,
+    });
+    return { subscription: updated, providerOk, providerError, localUpdated: true };
   }
 
   // Cancel at period end — disable Paystack renewals, keep access until period end
-  if (sub.providerSubscriptionCode) {
-    try { await disablePaystackSubscription(sub.providerSubscriptionCode); } catch { /* best-effort */ }
-  }
+  await tryDisable(sub.providerSubscriptionCode);
   const updated = await patchSubscription(sub.id, {
     cancelAtPeriodEnd: true, canceledAt: new Date(),
   });
-  await recordEvent(sub.id, "cancel_at_period_end", null);
-  return updated;
+  await recordEvent(sub.id, "cancel_at_period_end", null, {
+    providerOk, providerError,
+  });
+  return { subscription: updated, providerOk, providerError, localUpdated: true };
 }
 
 export async function resumeSubscription(input: {
   ownerId: number; storeId: number;
-}) {
+}): Promise<CancelResumeResult> {
   await assertStoreOwned(input.storeId, input.ownerId);
   const sub = await ensureStoreSubscription(input.storeId);
-  if (!sub.cancelAtPeriodEnd) return sub;
+  if (!sub.cancelAtPeriodEnd) {
+    return {
+      subscription: sub,
+      providerOk: true,
+      providerError: null,
+      localUpdated: false,
+    };
+  }
 
+  let providerOk = true;
+  let providerError: string | null = null;
   if (sub.providerSubscriptionCode) {
-    try { await enablePaystackSubscription(sub.providerSubscriptionCode); } catch { /* may need new checkout */ }
+    try {
+      await enablePaystackSubscription(sub.providerSubscriptionCode);
+    } catch (e) {
+      providerOk = false;
+      providerError = e instanceof Error ? e.message : "Paystack enable failed";
+      // Still clear local cancel flag so seller is not stuck; may need re-checkout for renewals
+    }
   }
 
   const updated = await patchSubscription(sub.id, {
     cancelAtPeriodEnd: false, canceledAt: null, status: "active",
   });
-  await recordEvent(sub.id, "resumed", null);
-  return updated;
+  await recordEvent(sub.id, "resumed", null, { providerOk, providerError });
+  return { subscription: updated, providerOk, providerError, localUpdated: true };
 }
 
 export async function listBillingHistory(storeId: number, limit = 50) {
@@ -838,14 +916,28 @@ export async function getBillingSummary(storeId: number) {
   const status = computeEffectiveStatus(sub);
   const history = await listBillingHistory(storeId, 20);
   const allPlans = await listActivePlans();
+  const displayStatus =
+    status === "past_due"
+      ? "past_due"
+      : sub.cancelAtPeriodEnd && (status === "active" || status === "past_due")
+        ? "canceling"
+        : status;
+
   return {
     subscription: {
-      id: sub.id, status, rawStatus: sub.status, cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+      id: sub.id,
+      status: displayStatus,
+      effectiveStatus: status,
+      rawStatus: sub.status,
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
       currentPeriodStart: sub.currentPeriodStart ? sub.currentPeriodStart.toISOString() : null,
       currentPeriodEnd: sub.currentPeriodEnd ? sub.currentPeriodEnd.toISOString() : null,
       canceledAt: sub.canceledAt ? sub.canceledAt.toISOString() : null,
       hasProviderSubscription: Boolean(sub.providerSubscriptionCode),
-      recurring: Boolean(sub.providerSubscriptionCode) && !sub.cancelAtPeriodEnd && status === "active",
+      recurring:
+        Boolean(sub.providerSubscriptionCode) &&
+        !sub.cancelAtPeriodEnd &&
+        status === "active",
     },
     plan: {
       id: plan.id, name: plan.name, slug: plan.slug, description: plan.description,

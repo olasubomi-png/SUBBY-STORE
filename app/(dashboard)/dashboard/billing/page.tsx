@@ -8,7 +8,9 @@ type Plan = {
 };
 type Summary = {
   subscription: {
-    status: string; cancelAtPeriodEnd: boolean;
+    status: string;
+    effectiveStatus?: string;
+    cancelAtPeriodEnd: boolean;
     currentPeriodEnd: string | null;
     recurring?: boolean;
     hasProviderSubscription?: boolean;
@@ -84,7 +86,7 @@ export default function BillingPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Cancel failed");
-      setMessage("Will cancel at period end.");
+      setMessage(json.message || "Will cancel at period end.");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Cancel failed");
@@ -97,7 +99,7 @@ export default function BillingPage() {
       const res = await fetch("/api/billing/resume", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Resume failed");
-      setMessage("Resumed.");
+      setMessage(json.message || "Resumed.");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Resume failed");
@@ -121,11 +123,31 @@ export default function BillingPage() {
         <h2 className="mt-1 text-xl font-semibold">{plan.name}</h2>
         <p className="text-sm text-ink-600">
           {plan.priceKobo === 0 ? "Free" : `${formatNgn(plan.priceKobo)} / ${plan.billingInterval}`}
-          {" · "}Status: <span className="capitalize font-medium">{subscription.status}</span>
-          {"recurring" in subscription && (subscription as { recurring?: boolean }).recurring ? (
+          {" · "}
+          Status:{" "}
+          <span className="font-medium capitalize">
+            {subscription.status === "past_due"
+              ? "Past due — update payment"
+              : subscription.status === "canceling"
+                ? "Canceling at period end"
+                : subscription.status}
+          </span>
+          {subscription.recurring ? (
             <span className="ml-2 text-emerald-700">· Auto-renews</span>
+          ) : subscription.cancelAtPeriodEnd && subscription.status !== "canceled" ? (
+            <span className="ml-2 text-amber-700">· Will not auto-renew</span>
           ) : null}
         </p>
+        {subscription.status === "past_due" ? (
+          <p className="mt-2 text-sm text-amber-800">
+            Payment failed. You keep Pro/Business access for a short grace period, then the store falls back to Free.
+          </p>
+        ) : null}
+        {subscription.currentPeriodEnd && plan.slug !== "free" ? (
+          <p className="mt-1 text-xs text-ink-500">
+            Current period ends {new Date(subscription.currentPeriodEnd).toLocaleString()}
+          </p>
+        ) : null}
         <div className="mt-3 flex gap-2">
           {subscription.cancelAtPeriodEnd && (
             <button type="button" disabled={busy} onClick={() => void resume()} className="rounded-lg bg-ink-900 px-4 py-2 text-sm text-white">Resume</button>
