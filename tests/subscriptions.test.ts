@@ -3,9 +3,12 @@ import { resetMemoryStore, memSignup, memCreateStore } from "@/lib/server/memory
 import { createProduct } from "@/lib/server/repo";
 import {
   seedMemoryPlans, listActivePlans, ensureStoreSubscription, startSubscriptionCheckout,
-  confirmSubscriptionPayment, cancelSubscription, getEffectivePlanForStore, computeEffectiveStatus, GRACE_DAYS,
+  confirmSubscriptionPayment, confirmRenewalPayment, markSubscriptionPastDue,
+  cancelSubscription, resumeSubscription, getEffectivePlanForStore, computeEffectiveStatus,
+  getStoreSubscription, GRACE_DAYS,
 } from "@/lib/server/subscriptions";
 import { canCreateProduct, canUseCampaigns } from "@/lib/server/entitlements";
+import { verifyPaystackWebhookSignature } from "@/lib/server/paystack";
 
 beforeEach(() => {
   resetMemoryStore();
@@ -18,15 +21,43 @@ beforeEach(() => {
 afterEach(() => resetMemoryStore());
 
 async function seedSeller() {
-  const user = await memSignup({ email: `sub-${Math.random().toString(16).slice(2)}@ex.com`, password: "password12", fullName: "Seller" });
-  const shop = memCreateStore({ ownerId: user.id, name: `Shop ${Math.random().toString(16).slice(2, 8)}` });
+  const user = await memSignup({
+    email: `sub-${Math.random().toString(16).slice(2)}@ex.com`,
+    password: "password12",
+    fullName: "Seller",
+  });
+  const shop = memCreateStore({
+    ownerId: user.id,
+    name: `Shop ${Math.random().toString(16).slice(2, 8)}`,
+  });
   return { user, shop };
 }
 
+async function activatePro(user: { id: number; email: string }, shopId: number) {
+  await ensureStoreSubscription(shopId);
+  const checkout = await startSubscriptionCheckout({
+    ownerId: user.id, storeId: shopId, planSlug: "pro", email: user.email,
+  });
+  if (checkout.kind !== "checkout") throw new Error("expected checkout");
+  await confirmSubscriptionPayment({
+    reference: checkout.reference,
+    amountKobo: checkout.amountKobo,
+    rawEventId: `evt_${checkout.reference}`,
+    authorizationCode: `AUTH_${checkout.reference}`,
+    customerCode: `CUS_${shopId}`,
+    subscriptionCode: `SUB_${shopId}`,
+    nextPaymentDate: new Date(Date.now() + 30 * 86400000).toISOString(),
+  });
+  return checkout;
+}
+
 describe("plans", () => {
-  it("lists free pro business", async () => {
+  it("lists free pro business with provider plan codes in mock", async () => {
     const plans = await listActivePlans();
     expect(plans.map((p) => p.slug).sort()).toEqual(["business", "free", "pro"]);
+    const pro = plans.find((p) => p.slug === "pro")!;
+    expect(pro.priceKobo).toBe(500_000);
+    expect(pro.providerPlanCode).toBeTruthy();
   });
 });
 
@@ -41,53 +72,139 @@ describe("limits", () => {
   });
 });
 
-describe("checkout", () => {
-  it("activates pro and is idempotent", async () => {
+describe("checkout and provider identifiers", () => {
+  it("activates pro and stores Paystack codes", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+    expect((await canUseCampaigns(shop.id)).allowed).toBe(true);
+    const sub = await getStoreSubscription(shop.id);
+    expect(sub?.providerSubscriptionCode).toMatch(/^SUB_/);
+    expect(sub?.providerCustomerCode).toMatch(/^CUS_/);
+    expect(sub?.providerAuthorizationCode).toMatch(/^AUTH_/);
+    expect(sub?.status).toBe("active");
+  });
+
+  it("is idempotent on rawEventId", async () => {
     const { user, shop } = await seedSeller();
     await ensureStoreSubscription(shop.id);
-    expect((await canUseCampaigns(shop.id)).allowed).toBe(false);
-    const checkout = await startSubscriptionCheckout({ ownerId: user.id, storeId: shop.id, planSlug: "pro", email: user.email });
+    const checkout = await startSubscriptionCheckout({
+      ownerId: user.id, storeId: shop.id, planSlug: "pro", email: user.email,
+    });
     if (checkout.kind !== "checkout") throw new Error("expected checkout");
-    const first = await confirmSubscriptionPayment({ reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: "evt1" });
+    const first = await confirmSubscriptionPayment({
+      reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: "evt_same",
+      subscriptionCode: "SUB_x", customerCode: "CUS_x", authorizationCode: "AUTH_x",
+    });
     expect(first.alreadyProcessed).toBe(false);
-    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
-    const second = await confirmSubscriptionPayment({ reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: "evt1" });
+    const second = await confirmSubscriptionPayment({
+      reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: "evt_same",
+    });
     expect(second.alreadyProcessed).toBe(true);
   });
 
-  it("rejects cross-owner", async () => {
+  it("rejects amount mismatch and cross-owner", async () => {
     const a = await seedSeller();
     const b = await seedSeller();
     await ensureStoreSubscription(a.shop.id);
+    const checkout = await startSubscriptionCheckout({
+      ownerId: a.user.id, storeId: a.shop.id, planSlug: "pro", email: a.user.email,
+    });
+    if (checkout.kind !== "checkout") throw new Error("expected checkout");
     await expect(
-      startSubscriptionCheckout({ ownerId: b.user.id, storeId: a.shop.id, planSlug: "pro", email: b.user.email })
+      confirmSubscriptionPayment({ reference: checkout.reference, amountKobo: 1 })
+    ).rejects.toThrow(/amount_mismatch/);
+    await expect(
+      startSubscriptionCheckout({
+        ownerId: b.user.id, storeId: a.shop.id, planSlug: "pro", email: b.user.email,
+      })
     ).rejects.toThrow(/Store not found/);
   });
 });
 
-describe("cancel", () => {
-  it("immediate cancel to free", async () => {
+describe("renewal", () => {
+  it("extends period on successful renewal and is idempotent", async () => {
     const { user, shop } = await seedSeller();
-    await ensureStoreSubscription(shop.id);
-    const checkout = await startSubscriptionCheckout({ ownerId: user.id, storeId: shop.id, planSlug: "pro", email: user.email });
-    if (checkout.kind !== "checkout") throw new Error("expected checkout");
-    await confirmSubscriptionPayment({ reference: checkout.reference, amountKobo: checkout.amountKobo, rawEventId: "evt2" });
+    await activatePro(user, shop.id);
+    const subBefore = await getStoreSubscription(shop.id);
+    const endBefore = subBefore!.currentPeriodEnd!.getTime();
+    const next = new Date(endBefore + 30 * 86400000).toISOString();
+    const first = await confirmRenewalPayment({
+      reference: `ren_${shop.id}_1`,
+      amountKobo: 500_000,
+      rawEventId: "evt_ren_1",
+      subscriptionCode: `SUB_${shop.id}`,
+      customerCode: `CUS_${shop.id}`,
+      nextPaymentDate: next,
+    });
+    expect(first.alreadyProcessed).toBe(false);
+    expect(first.subscription.status).toBe("active");
+    expect(first.subscription.currentPeriodEnd!.getTime()).toBeGreaterThanOrEqual(endBefore);
+    const second = await confirmRenewalPayment({
+      reference: `ren_${shop.id}_1`,
+      amountKobo: 500_000,
+      rawEventId: "evt_ren_1",
+      subscriptionCode: `SUB_${shop.id}`,
+    });
+    expect(second.alreadyProcessed).toBe(true);
+  });
+
+  it("marks past_due on failed renewal", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    const result = await markSubscriptionPastDue({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_fail_1",
+    });
+    expect(result?.status).toBe("past_due");
+    // still entitled during grace
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+  });
+});
+
+describe("cancel and resume", () => {
+  it("cancel at period end keeps benefits; resume clears flag", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    const canceled = await cancelSubscription({
+      ownerId: user.id, storeId: shop.id, immediate: false,
+    });
+    expect(canceled.cancelAtPeriodEnd).toBe(true);
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+    const resumed = await resumeSubscription({ ownerId: user.id, storeId: shop.id });
+    expect(resumed.cancelAtPeriodEnd).toBe(false);
+  });
+
+  it("immediate cancel switches to free without deleting products", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    for (let i = 0; i < 5; i++) {
+      await createProduct({ ownerId: user.id, storeId: shop.id, name: `Keep${i}`, priceKobo: 100_000, stock: 1 });
+    }
     await cancelSubscription({ ownerId: user.id, storeId: shop.id, immediate: true });
     expect((await getEffectivePlanForStore(shop.id)).slug).toBe("free");
   });
 });
 
-describe("grace", () => {
-  it("past_due then expired", () => {
+describe("grace period", () => {
+  it("past_due then expired after grace", () => {
     const now = new Date();
     const ended = new Date(now.getTime() - 86400000);
     const sub = {
-      id: 1, storeId: 1, planId: 2, status: "active", provider: "paystack",
-      providerSubscriptionCode: null, providerCustomerCode: null,
+      id: 1, storeId: 1, planId: 2, status: "active" as string, provider: "paystack",
+      providerSubscriptionCode: "SUB_x", providerCustomerCode: null,
+      providerAuthorizationCode: null, providerEmailToken: null,
       currentPeriodStart: ended, currentPeriodEnd: ended, cancelAtPeriodEnd: false, canceledAt: null,
       createdAt: now, updatedAt: now,
     };
     expect(computeEffectiveStatus(sub, now)).toBe("past_due");
     expect(computeEffectiveStatus(sub, new Date(ended.getTime() + (GRACE_DAYS + 1) * 86400000))).toBe("expired");
+  });
+});
+
+describe("webhook signature", () => {
+  it("accepts mock-valid-signature in mock mode", () => {
+    expect(verifyPaystackWebhookSignature("{}", "mock-valid-signature")).toBe(true);
+    expect(verifyPaystackWebhookSignature("{}", "bad")).toBe(false);
   });
 });

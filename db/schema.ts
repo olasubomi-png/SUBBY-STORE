@@ -359,6 +359,8 @@ export const subscriptionPlans = pgTable(
     billingInterval: varchar("billing_interval", { length: 20 }).notNull().default("monthly"),
     productLimit: integer("product_limit"),
     featuresJson: text("features_json").default("{}").notNull(),
+    /** Paystack plan code (PLN_...) for recurring billing */
+    providerPlanCode: varchar("provider_plan_code", { length: 120 }),
     active: boolean("active").default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -380,6 +382,10 @@ export const subscriptions = pgTable(
     provider: varchar("provider", { length: 40 }).default("paystack").notNull(),
     providerSubscriptionCode: varchar("provider_subscription_code", { length: 120 }),
     providerCustomerCode: varchar("provider_customer_code", { length: 120 }),
+    /** Reusable card authorization for Paystack recurring */
+    providerAuthorizationCode: varchar("provider_authorization_code", { length: 120 }),
+    /** Email token used with Paystack enable/disable subscription APIs */
+    providerEmailToken: varchar("provider_email_token", { length: 160 }),
     currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
     currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
@@ -391,6 +397,8 @@ export const subscriptions = pgTable(
     index("subscriptions_store_idx").on(t.storeId),
     index("subscriptions_status_idx").on(t.status),
     uniqueIndex("subscriptions_store_uidx").on(t.storeId),
+    uniqueIndex("subscriptions_provider_sub_uidx").on(t.providerSubscriptionCode),
+    index("subscriptions_provider_customer_idx").on(t.providerCustomerCode),
   ]
 );
 

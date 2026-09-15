@@ -170,11 +170,13 @@ export type MemoryStore = {
   subscriptionPlans: Array<{
     id: number; name: string; slug: string; description: string; priceKobo: number;
     billingInterval: string; productLimit: number | null; featuresJson: string;
+    providerPlanCode: string | null;
     active: boolean; sortOrder: number; createdAt: Date; updatedAt: Date;
   }>;
   subscriptions: Array<{
     id: number; storeId: number; planId: number; status: string; provider: string;
     providerSubscriptionCode: string | null; providerCustomerCode: string | null;
+    providerAuthorizationCode: string | null; providerEmailToken: string | null;
     currentPeriodStart: Date | null; currentPeriodEnd: Date | null;
     cancelAtPeriodEnd: boolean; canceledAt: Date | null; createdAt: Date; updatedAt: Date;
   }>;

@@ -10,6 +10,8 @@ type Summary = {
   subscription: {
     status: string; cancelAtPeriodEnd: boolean;
     currentPeriodEnd: string | null;
+    recurring?: boolean;
+    hasProviderSubscription?: boolean;
   };
   plan: Plan; plans: Plan[];
   history: Array<{ id: number; reference: string; amountKobo: number; status: string; transactionType: string; createdAt: string }>;
@@ -120,6 +122,9 @@ export default function BillingPage() {
         <p className="text-sm text-ink-600">
           {plan.priceKobo === 0 ? "Free" : `${formatNgn(plan.priceKobo)} / ${plan.billingInterval}`}
           {" · "}Status: <span className="capitalize font-medium">{subscription.status}</span>
+          {"recurring" in subscription && (subscription as { recurring?: boolean }).recurring ? (
+            <span className="ml-2 text-emerald-700">· Auto-renews</span>
+          ) : null}
         </p>
         <div className="mt-3 flex gap-2">
           {subscription.cancelAtPeriodEnd && (
