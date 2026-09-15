@@ -6,6 +6,8 @@ import {
   confirmSubscriptionPayment,
   confirmRenewalPayment,
   markSubscriptionPastDue,
+  markSubscriptionNonRenewing,
+  markSubscriptionDisabledByProvider,
 } from "@/lib/server/subscriptions";
 
 export async function POST(req: Request) {
@@ -53,10 +55,45 @@ export async function POST(req: Request) {
           ? String(event.data.id)
           : null;
 
+    // --- Will not renew (not a payment failure) ---
+    if (eventName === "subscription.not_renew") {
+      const subCode = event.data?.subscription?.subscription_code ?? null;
+      const customerCode = event.data?.customer?.customer_code ?? null;
+      const result = await markSubscriptionNonRenewing({
+        subscriptionCode: subCode,
+        customerCode,
+        rawEventId,
+      });
+      return NextResponse.json({
+        ok: true,
+        type: "subscription_not_renew",
+        found: Boolean(result),
+        status: result?.status ?? null,
+        cancelAtPeriodEnd: result?.cancelAtPeriodEnd ?? null,
+      });
+    }
+
+    // --- Provider disabled subscription (not a payment failure) ---
+    if (eventName === "subscription.disable") {
+      const subCode = event.data?.subscription?.subscription_code ?? null;
+      const customerCode = event.data?.customer?.customer_code ?? null;
+      const result = await markSubscriptionDisabledByProvider({
+        subscriptionCode: subCode,
+        customerCode,
+        rawEventId,
+      });
+      return NextResponse.json({
+        ok: true,
+        type: "subscription_disable",
+        found: Boolean(result),
+        status: result?.status ?? null,
+        cancelAtPeriodEnd: result?.cancelAtPeriodEnd ?? null,
+      });
+    }
+
     // --- Failed recurring payment ---
     if (
       eventName === "invoice.payment_failed" ||
-      eventName === "subscription.not_renew" ||
       (eventName === "charge.failed" && event.data?.subscription?.subscription_code)
     ) {
       const subCode = event.data?.subscription?.subscription_code ?? null;
@@ -72,23 +109,6 @@ export async function POST(req: Request) {
         found: Boolean(result),
         status: result?.status ?? null,
       });
-    }
-
-    // --- Subscription disabled on provider ---
-    if (eventName === "subscription.disable") {
-      const subCode = event.data?.subscription?.subscription_code ?? null;
-      if (subCode) {
-        const result = await markSubscriptionPastDue({
-          subscriptionCode: subCode,
-          rawEventId,
-        });
-        return NextResponse.json({
-          ok: true,
-          type: "subscription_disable",
-          found: Boolean(result),
-        });
-      }
-      return NextResponse.json({ ok: true, ignored: true });
     }
 
     if (eventName !== "charge.success" && eventName !== "invoice.payment_success") {

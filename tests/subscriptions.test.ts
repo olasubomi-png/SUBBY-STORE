@@ -5,7 +5,8 @@ import {
   seedMemoryPlans, listActivePlans, ensureStoreSubscription, startSubscriptionCheckout,
   confirmSubscriptionPayment, confirmRenewalPayment, markSubscriptionPastDue,
   cancelSubscription, resumeSubscription, getEffectivePlanForStore, computeEffectiveStatus,
-  getStoreSubscription, GRACE_DAYS,
+  getStoreSubscription, markSubscriptionNonRenewing, markSubscriptionDisabledByProvider,
+  GRACE_DAYS,
 } from "@/lib/server/subscriptions";
 import { canCreateProduct, canUseCampaigns } from "@/lib/server/entitlements";
 import { verifyPaystackWebhookSignature } from "@/lib/server/paystack";
@@ -199,6 +200,93 @@ describe("grace period", () => {
     };
     expect(computeEffectiveStatus(sub, now)).toBe("past_due");
     expect(computeEffectiveStatus(sub, new Date(ended.getTime() + (GRACE_DAYS + 1) * 86400000))).toBe("expired");
+  });
+});
+
+
+describe("provider not_renew", () => {
+  it("sets cancelAtPeriodEnd without past_due or grace", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    const first = await markSubscriptionNonRenewing({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_not_renew_1",
+    });
+    expect(first?.status).not.toBe("past_due");
+    expect(first?.cancelAtPeriodEnd).toBe(true);
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+
+    const second = await markSubscriptionNonRenewing({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_not_renew_1",
+    });
+    expect(second?.cancelAtPeriodEnd).toBe(true);
+    expect(second?.status).not.toBe("past_due");
+  });
+});
+
+describe("provider disable", () => {
+  it("before period end: non-renewing, not past_due, paid plan kept", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    const first = await markSubscriptionDisabledByProvider({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_disable_1",
+    });
+    expect(first?.status).not.toBe("past_due");
+    expect(first?.cancelAtPeriodEnd).toBe(true);
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
+
+    const second = await markSubscriptionDisabledByProvider({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_disable_1",
+    });
+    expect(second?.cancelAtPeriodEnd).toBe(true);
+  });
+
+  it("after period end: Free fallback, products untouched", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    for (let i = 0; i < 3; i++) {
+      await createProduct({
+        ownerId: user.id, storeId: shop.id, name: `KeepD${i}`, priceKobo: 100_000, stock: 1,
+      });
+    }
+    // Force period already ended
+    const sub = await getStoreSubscription(shop.id);
+    const { getMemoryStore } = await import("@/lib/server/memory-repo");
+    const ms = getMemoryStore();
+    const idx = ms.subscriptions.findIndex((s) => s.id === sub!.id);
+    ms.subscriptions[idx] = {
+      ...ms.subscriptions[idx]!,
+      currentPeriodEnd: new Date(Date.now() - 86400000),
+    };
+
+    const result = await markSubscriptionDisabledByProvider({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_disable_ended",
+    });
+    expect(result?.status).toBe("canceled");
+    expect(result?.status).not.toBe("past_due");
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("free");
+  });
+});
+
+describe("failed payment stays past_due with grace", () => {
+  it("duplicate failed event is idempotent", async () => {
+    const { user, shop } = await seedSeller();
+    await activatePro(user, shop.id);
+    const a = await markSubscriptionPastDue({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_fail_dup",
+    });
+    expect(a?.status).toBe("past_due");
+    const b = await markSubscriptionPastDue({
+      subscriptionCode: `SUB_${shop.id}`,
+      rawEventId: "evt_fail_dup",
+    });
+    expect(b?.status).toBe("past_due");
+    expect((await getEffectivePlanForStore(shop.id)).slug).toBe("pro");
   });
 });
 

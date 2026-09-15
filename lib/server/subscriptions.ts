@@ -240,7 +240,12 @@ export function computeEffectiveStatus(sub: SubscriptionRow, now = new Date()): 
     }
     return "past_due";
   }
+  // Period ended while still "active"
   if (sub.currentPeriodEnd && sub.currentPeriodEnd.getTime() < now.getTime()) {
+    // Voluntary non-renewal: no payment grace
+    if (sub.cancelAtPeriodEnd) {
+      return "canceled";
+    }
     const graceEnd = sub.currentPeriodEnd.getTime() + GRACE_DAYS * 86400000;
     if (now.getTime() > graceEnd) return "expired";
     return "past_due";
@@ -260,6 +265,9 @@ async function refreshSubscriptionStatus(sub: SubscriptionRow): Promise<Subscrip
         ...ms.subscriptions[idx]!,
         status: effective === "expired" ? "expired" : effective,
         planId: effective === "expired" || effective === "canceled" ? free.id : ms.subscriptions[idx]!.planId,
+        ...(effective === "expired" || effective === "canceled"
+          ? { cancelAtPeriodEnd: false, providerSubscriptionCode: null }
+          : {}),
         updatedAt: new Date(),
       };
       ms.subscriptions[idx] = next;
@@ -270,7 +278,9 @@ async function refreshSubscriptionStatus(sub: SubscriptionRow): Promise<Subscrip
   const updated = await getDb().update(subscriptions).set({
     status: effective === "expired" ? "expired" : effective,
     updatedAt: new Date(),
-    ...(effective === "expired" ? { planId: free.id } : {}),
+    ...(effective === "expired" || effective === "canceled"
+      ? { planId: free.id, cancelAtPeriodEnd: false, providerSubscriptionCode: null }
+      : {}),
   }).where(eq(subscriptions.id, sub.id)).returning();
   return (updated[0] as SubscriptionRow) ?? sub;
 }
@@ -645,28 +655,122 @@ export async function confirmRenewalPayment(input: {
   return { alreadyProcessed: false, subscription: updated, plan };
 }
 
-/** Failed renewal → past_due (grace), then expire via refresh. */
+async function resolveSubByProvider(input: {
+  subscriptionCode?: string | null;
+  customerCode?: string | null;
+}): Promise<SubscriptionRow | null> {
+  let sub: SubscriptionRow | null = null;
+  if (input.subscriptionCode) sub = await getSubscriptionByProviderCode(input.subscriptionCode);
+  if (!sub && input.customerCode) sub = await getSubscriptionByCustomerCode(input.customerCode);
+  return sub;
+}
+
+function alreadyRecordedProviderEvent(providerEventId: string | null | undefined): boolean {
+  if (!providerEventId || !useMemory()) return false;
+  return mem.getMemoryStore().subscriptionEvents.some((e) => e.providerEventId === providerEventId);
+}
+
+/** Failed renewal payment → past_due (3-day grace), then expire via refresh. */
 export async function markSubscriptionPastDue(input: {
   subscriptionCode?: string | null;
   customerCode?: string | null;
   rawEventId?: string | null;
 }): Promise<SubscriptionRow | null> {
-  let sub: SubscriptionRow | null = null;
-  if (input.subscriptionCode) sub = await getSubscriptionByProviderCode(input.subscriptionCode);
-  if (!sub && input.customerCode) sub = await getSubscriptionByCustomerCode(input.customerCode);
+  const sub = await resolveSubByProvider(input);
   if (!sub) return null;
 
-  if (input.rawEventId) {
-    // idempotent event record
-    await recordEvent(sub.id, "renewal_failed", input.rawEventId);
+  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+    return refreshSubscriptionStatus(sub);
   }
 
   if (sub.status === "past_due" || sub.status === "expired" || sub.status === "canceled") {
+    await recordEvent(sub.id, "renewal_failed", input.rawEventId ?? null);
     return refreshSubscriptionStatus(sub);
   }
 
   const updated = await patchSubscription(sub.id, { status: "past_due" });
   await recordEvent(updated.id, "renewal_failed", input.rawEventId ?? null);
+  return refreshSubscriptionStatus(updated);
+}
+
+/**
+ * Paystack subscription.not_renew — will not renew.
+ * Keep paid plan until currentPeriodEnd. No past_due / no payment grace.
+ */
+export async function markSubscriptionNonRenewing(input: {
+  subscriptionCode?: string | null;
+  customerCode?: string | null;
+  rawEventId?: string | null;
+}): Promise<SubscriptionRow | null> {
+  const sub = await resolveSubByProvider(input);
+  if (!sub) return null;
+
+  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+    return refreshSubscriptionStatus(sub);
+  }
+
+  if (sub.cancelAtPeriodEnd || sub.status === "canceled" || sub.status === "expired") {
+    await recordEvent(sub.id, "provider_not_renew", input.rawEventId ?? null);
+    return refreshSubscriptionStatus(sub);
+  }
+
+  const updated = await patchSubscription(sub.id, {
+    cancelAtPeriodEnd: true,
+    canceledAt: sub.canceledAt ?? new Date(),
+  });
+  await recordEvent(updated.id, "provider_not_renew", input.rawEventId ?? null);
+  return refreshSubscriptionStatus(updated);
+}
+
+/**
+ * Paystack subscription.disable — provider terminated subscription.
+ * Period remaining: non-renewing access until currentPeriodEnd (not past_due).
+ * Period ended: canceled + Free fallback.
+ */
+export async function markSubscriptionDisabledByProvider(input: {
+  subscriptionCode?: string | null;
+  customerCode?: string | null;
+  rawEventId?: string | null;
+}): Promise<SubscriptionRow | null> {
+  const sub = await resolveSubByProvider(input);
+  if (!sub) return null;
+
+  if (alreadyRecordedProviderEvent(input.rawEventId)) {
+    return refreshSubscriptionStatus(sub);
+  }
+
+  const now = new Date();
+  const periodActive =
+    sub.currentPeriodEnd != null && sub.currentPeriodEnd.getTime() > now.getTime();
+
+  if (periodActive) {
+    if (sub.cancelAtPeriodEnd && sub.status !== "past_due") {
+      await recordEvent(sub.id, "provider_disable", input.rawEventId ?? null);
+      return refreshSubscriptionStatus(sub);
+    }
+    const updated = await patchSubscription(sub.id, {
+      cancelAtPeriodEnd: true,
+      canceledAt: sub.canceledAt ?? new Date(),
+      // Clear mistaken past_due from older webhook routing
+      status: sub.status === "past_due" ? "active" : sub.status,
+    });
+    await recordEvent(updated.id, "provider_disable", input.rawEventId ?? null);
+    return refreshSubscriptionStatus(updated);
+  }
+
+  const free = await getFreePlan();
+  if (sub.status === "canceled" || sub.status === "expired") {
+    await recordEvent(sub.id, "provider_disable", input.rawEventId ?? null);
+    return refreshSubscriptionStatus(sub);
+  }
+  const updated = await patchSubscription(sub.id, {
+    planId: free.id,
+    status: "canceled",
+    cancelAtPeriodEnd: false,
+    canceledAt: sub.canceledAt ?? new Date(),
+    providerSubscriptionCode: null,
+  });
+  await recordEvent(updated.id, "provider_disable", input.rawEventId ?? null);
   return refreshSubscriptionStatus(updated);
 }
 
