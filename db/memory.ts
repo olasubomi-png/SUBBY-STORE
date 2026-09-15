@@ -190,11 +190,36 @@ export type MemoryStore = {
     id: number; subscriptionId: number; eventType: string; providerEventId: string | null;
     metadata: string | null; processedAt: Date; createdAt: Date;
   }>;
+  sellerWallets: Array<{
+    id: number; storeId: number; availableKobo: number; pendingKobo: number;
+    lifetimeEarnedKobo: number; lifetimeWithdrawnKobo: number; debtKobo: number;
+    createdAt: Date; updatedAt: Date;
+  }>;
+  walletLedger: Array<{
+    id: number; storeId: number; walletId: number; entryType: string; direction: string;
+    amountKobo: number; balanceAfterAvailableKobo: number; balanceAfterPendingKobo: number;
+    orderId: number | null; withdrawalId: number | null; reference: string;
+    idempotencyKey: string; providerEventId: string | null; metadata: string | null; createdAt: Date;
+  }>;
+  sellerBankAccounts: Array<{
+    id: number; storeId: number; bankCode: string; bankName: string;
+    accountNumberLast4: string; accountName: string; recipientCode: string;
+    active: boolean; createdAt: Date; updatedAt: Date;
+  }>;
+  withdrawals: Array<{
+    id: number; storeId: number; walletId: number; bankAccountId: number | null;
+    amountKobo: number; feeKobo: number; netKobo: number; status: string;
+    reference: string; transferCode: string | null; recipientCode: string | null;
+    failureReason: string | null; providerEventId: string | null;
+    createdAt: Date; processingAt: Date | null; completedAt: Date | null;
+    failedAt: Date | null; reversedAt: Date | null; updatedAt: Date;
+  }>;
   seq: {
     user: number; store: number; product: number; order: number; item: number;
     coupon: number; couponProduct: number; payment: number; productImage: number;
     storeEvent: number; notification: number; campaign: number; campaignProduct: number;
     subscriptionPlan: number; subscription: number; billingTransaction: number; subscriptionEvent: number;
+    sellerWallet: number; walletLedger: number; sellerBankAccount: number; withdrawal: number;
   };
 };
 
@@ -203,11 +228,11 @@ export function createMemoryStore(): MemoryStore {
     users: [], stores: [], products: [], orders: [], orderItems: [], payments: [],
     productImages: [], coupons: [], storeEvents: [], notifications: [], couponProducts: [],
     campaigns: [], campaignProducts: [], subscriptionPlans: [], subscriptions: [],
-    billingTransactions: [], subscriptionEvents: [],
+    billingTransactions: [], subscriptionEvents: [], sellerWallets: [], walletLedger: [], sellerBankAccounts: [], withdrawals: [],
     seq: {
       user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1,
       coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1, campaign: 1, campaignProduct: 1,
-      subscriptionPlan: 1, subscription: 1, billingTransaction: 1, subscriptionEvent: 1,
+      subscriptionPlan: 1, subscription: 1, billingTransaction: 1, subscriptionEvent: 1, sellerWallet: 1, walletLedger: 1, sellerBankAccount: 1, withdrawal: 1,
     },
   };
 }

@@ -443,3 +443,68 @@ export const subscriptionEvents = pgTable(
     uniqueIndex("subscription_events_provider_uidx").on(t.providerEventId),
   ]
 );
+
+export const sellerWallets = pgTable("seller_wallets", {
+  id: serial("id").primaryKey(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  availableKobo: integer("available_kobo").notNull().default(0),
+  pendingKobo: integer("pending_kobo").notNull().default(0),
+  lifetimeEarnedKobo: integer("lifetime_earned_kobo").notNull().default(0),
+  lifetimeWithdrawnKobo: integer("lifetime_withdrawn_kobo").notNull().default(0),
+  debtKobo: integer("debt_kobo").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("seller_wallets_store_uidx").on(t.storeId)]);
+
+export const walletLedger = pgTable("wallet_ledger", {
+  id: serial("id").primaryKey(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  walletId: integer("wallet_id").notNull().references(() => sellerWallets.id, { onDelete: "cascade" }),
+  entryType: varchar("entry_type", { length: 40 }).notNull(),
+  direction: varchar("direction", { length: 10 }).notNull(),
+  amountKobo: integer("amount_kobo").notNull(),
+  balanceAfterAvailableKobo: integer("balance_after_available_kobo").notNull(),
+  balanceAfterPendingKobo: integer("balance_after_pending_kobo").notNull(),
+  orderId: integer("order_id").references(() => orders.id, { onDelete: "set null" }),
+  withdrawalId: integer("withdrawal_id"),
+  reference: varchar("reference", { length: 160 }).notNull(),
+  idempotencyKey: varchar("idempotency_key", { length: 160 }).notNull(),
+  providerEventId: varchar("provider_event_id", { length: 160 }),
+  metadata: text("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("wallet_ledger_idempotency_uidx").on(t.idempotencyKey), uniqueIndex("wallet_ledger_provider_event_uidx").on(t.providerEventId), index("wallet_ledger_store_idx").on(t.storeId)]);
+
+export const sellerBankAccounts = pgTable("seller_bank_accounts", {
+  id: serial("id").primaryKey(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  bankCode: varchar("bank_code", { length: 20 }).notNull(),
+  bankName: varchar("bank_name", { length: 120 }).notNull(),
+  accountNumberLast4: varchar("account_number_last4", { length: 4 }).notNull(),
+  accountName: varchar("account_name", { length: 160 }).notNull(),
+  recipientCode: varchar("recipient_code", { length: 80 }).notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index("seller_bank_accounts_store_idx").on(t.storeId), uniqueIndex("seller_bank_accounts_recipient_uidx").on(t.recipientCode)]);
+
+export const withdrawals = pgTable("withdrawals", {
+  id: serial("id").primaryKey(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  walletId: integer("wallet_id").notNull().references(() => sellerWallets.id, { onDelete: "cascade" }),
+  bankAccountId: integer("bank_account_id").references(() => sellerBankAccounts.id, { onDelete: "set null" }),
+  amountKobo: integer("amount_kobo").notNull(),
+  feeKobo: integer("fee_kobo").notNull().default(0),
+  netKobo: integer("net_kobo").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  reference: varchar("reference", { length: 120 }).notNull(),
+  transferCode: varchar("transfer_code", { length: 80 }),
+  recipientCode: varchar("recipient_code", { length: 80 }),
+  failureReason: text("failure_reason"),
+  providerEventId: varchar("provider_event_id", { length: 160 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  processingAt: timestamp("processing_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  reversedAt: timestamp("reversed_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("withdrawals_reference_uidx").on(t.reference), uniqueIndex("withdrawals_transfer_code_uidx").on(t.transferCode), index("withdrawals_store_idx").on(t.storeId)]);

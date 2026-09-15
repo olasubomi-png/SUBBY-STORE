@@ -9,6 +9,7 @@ import {
   markSubscriptionNonRenewing,
   markSubscriptionDisabledByProvider,
 } from "@/lib/server/subscriptions";
+import { completeWithdrawal, failWithdrawal, reverseWithdrawal } from "@/lib/server/wallet";
 
 export async function POST(req: Request) {
   try {
@@ -54,6 +55,29 @@ export async function POST(req: Request) {
         : event.data?.id != null
           ? String(event.data.id)
           : null;
+
+
+    if (eventName === "transfer.success" || eventName === "transfer.failed" || eventName === "transfer.reversed") {
+      const transferRef = (event.data as { reference?: string })?.reference || null;
+      const transferCode = (event.data as { transfer_code?: string })?.transfer_code || null;
+      if (!transferRef) return NextResponse.json({ ok: true, ignored: true });
+      try {
+        if (eventName === "transfer.success") {
+          const result = await completeWithdrawal({ reference: transferRef, transferCode, providerEventId: rawEventId });
+          return NextResponse.json({ ok: true, type: "transfer_success", alreadyProcessed: result.alreadyProcessed });
+        }
+        if (eventName === "transfer.failed") {
+          const result = await failWithdrawal({ reference: transferRef, reason: "failed", providerEventId: rawEventId });
+          return NextResponse.json({ ok: true, type: "transfer_failed", alreadyProcessed: result.alreadyProcessed });
+        }
+        const result = await reverseWithdrawal({ reference: transferRef, providerEventId: rawEventId });
+        return NextResponse.json({ ok: true, type: "transfer_reversed", alreadyProcessed: result.alreadyProcessed });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "transfer_webhook_failed";
+        if (msg === "withdrawal_not_found") return NextResponse.json({ ok: true, unknown_withdrawal: true });
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
+    }
 
     // --- Will not renew (not a payment failure) ---
     if (eventName === "subscription.not_renew") {

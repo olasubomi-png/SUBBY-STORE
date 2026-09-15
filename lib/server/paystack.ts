@@ -393,3 +393,33 @@ export function verifyPaystackWebhookSignature(
     return false;
   }
 }
+
+
+export type PaystackBank = { name: string; code: string; active: boolean };
+export async function listPaystackBanks(): Promise<PaystackBank[]> {
+  if (isPaystackMock()) return [{ name: "Access Bank", code: "044", active: true }, { name: "GTBank", code: "058", active: true }, { name: "Zenith Bank", code: "057", active: true }, { name: "UBA", code: "033", active: true }];
+  const data = await paystackFetch<Array<{ name: string; code: string; active: boolean }>>("/bank?country=nigeria&currency=NGN");
+  return (data || []).filter((b) => b.active !== false).map((b) => ({ name: b.name, code: b.code, active: true }));
+}
+export async function resolvePaystackAccount(input: { accountNumber: string; bankCode: string }) {
+  if (isPaystackMock()) {
+    if (!/^\d{10}$/.test(input.accountNumber)) throw new Error("Invalid account number");
+    return { accountNumber: input.accountNumber, accountName: "MOCK ACCOUNT HOLDER", bankId: 1 as number | null };
+  }
+  const q = new URLSearchParams({ account_number: input.accountNumber, bank_code: input.bankCode });
+  const data = await paystackFetch<{ account_number: string; account_name: string; bank_id?: number }>(`/bank/resolve?${q}`);
+  return { accountNumber: data.account_number, accountName: data.account_name, bankId: data.bank_id ?? null };
+}
+export async function createPaystackTransferRecipient(input: { name: string; accountNumber: string; bankCode: string }) {
+  if (isPaystackMock()) return { recipientCode: `RCP_mock_${input.bankCode}_${input.accountNumber.slice(-4)}`, details: {} };
+  const data = await paystackFetch<{ recipient_code: string }>("/transferrecipient", { method: "POST", body: JSON.stringify({ type: "nuban", name: input.name, account_number: input.accountNumber, bank_code: input.bankCode, currency: "NGN" }) });
+  return { recipientCode: data.recipient_code, details: {} };
+}
+export async function initiatePaystackTransfer(input: { amountKobo: number; recipientCode: string; reference: string; reason?: string }) {
+  if (isPaystackMock()) {
+    if (input.reference.includes("_fail_")) throw new Error("Transfer rejected by provider (mock)");
+    return { transferCode: `TRF_mock_${input.reference.slice(0, 20)}`, reference: input.reference, status: "pending" };
+  }
+  const data = await paystackFetch<{ transfer_code?: string; reference?: string; status?: string }>("/transfer", { method: "POST", body: JSON.stringify({ source: "balance", amount: input.amountKobo, recipient: input.recipientCode, reference: input.reference, reason: input.reason || "Seller withdrawal", currency: "NGN" }) });
+  return { transferCode: data.transfer_code ?? null, reference: data.reference || input.reference, status: data.status || "pending" };
+}

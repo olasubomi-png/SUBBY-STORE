@@ -902,6 +902,15 @@ export async function confirmPaidOrder(
     !result.refundRequired
   ) {
     try {
+      const { creditOrderEarning } = await import("@/lib/server/wallet");
+      await creditOrderEarning({
+        storeId: result.order.storeId,
+        orderId: result.order.id,
+        amountKobo: result.order.totalKobo,
+        paymentReference: reference,
+      });
+    } catch { /* non-blocking */ }
+    try {
       const { recordStoreEvent } = await import("@/lib/server/store-events");
       await recordStoreEvent({
         storeId: result.order.storeId,

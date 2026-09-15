@@ -14,6 +14,7 @@ const links = [
   { href: "/dashboard/coupons", label: "Coupons" },
   { href: "/dashboard/marketing", label: "Marketing" },
   { href: "/dashboard/billing", label: "Billing" },
+  { href: "/dashboard/wallet", label: "Wallet" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
