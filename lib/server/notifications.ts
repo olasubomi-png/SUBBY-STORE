@@ -18,7 +18,13 @@ export type NotificationType =
   | "coupon_expiring"
   | "campaign_scheduled"
   | "campaign_started"
-  | "campaign_expired";
+  | "campaign_expired"
+  | "wallet_earning"
+  | "withdrawal_requested"
+  | "withdrawal_succeeded"
+  | "withdrawal_failed"
+  | "withdrawal_reversed"
+  | "wallet_debt";
 
 export type NotificationRow = {
   id: number;
@@ -395,4 +401,98 @@ export async function dismissNotification(
     )
     .returning();
   return deleted.length > 0;
+}
+
+
+/** Idempotent wallet notifications (dedupeKey prevents webhook/recon spam). */
+export async function notifyWalletEarning(input: {
+  storeId: number;
+  orderId: number;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "wallet_earning",
+    title: "Earning credited",
+    message: `${formatNgn(input.amountKobo)} from order #${input.orderId} was added to your wallet.`,
+    relatedOrderId: input.orderId,
+    href: "/dashboard/wallet",
+    dedupeKey: `wallet_earning:${input.orderId}`,
+  });
+}
+
+export async function notifyWithdrawalRequested(input: {
+  storeId: number;
+  reference: string;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "withdrawal_requested",
+    title: "Withdrawal requested",
+    message: `${formatNgn(input.amountKobo)} withdrawal is processing.`,
+    href: "/dashboard/wallet/withdrawals",
+    dedupeKey: `withdrawal_requested:${input.reference}`,
+  });
+}
+
+export async function notifyWithdrawalSucceeded(input: {
+  storeId: number;
+  reference: string;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "withdrawal_succeeded",
+    title: "Withdrawal successful",
+    message: `${formatNgn(input.amountKobo)} was sent to your bank account.`,
+    href: "/dashboard/wallet/withdrawals",
+    dedupeKey: `withdrawal_succeeded:${input.reference}`,
+  });
+}
+
+export async function notifyWithdrawalFailed(input: {
+  storeId: number;
+  reference: string;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "withdrawal_failed",
+    title: "Withdrawal failed",
+    message: `${formatNgn(input.amountKobo)} withdrawal failed. Your balance has been restored.`,
+    href: "/dashboard/wallet/withdrawals",
+    dedupeKey: `withdrawal_failed:${input.reference}`,
+  });
+}
+
+export async function notifyWithdrawalReversed(input: {
+  storeId: number;
+  reference: string;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "withdrawal_reversed",
+    title: "Withdrawal reversed",
+    message: `${formatNgn(input.amountKobo)} was returned to your wallet.`,
+    href: "/dashboard/wallet/withdrawals",
+    dedupeKey: `withdrawal_reversed:${input.reference}`,
+  });
+}
+
+export async function notifyWalletDebt(input: {
+  storeId: number;
+  orderId: number;
+  amountKobo: number;
+}) {
+  await createNotification({
+    storeId: input.storeId,
+    type: "wallet_debt",
+    title: "Outstanding wallet balance",
+    message: `A refund created ${formatNgn(input.amountKobo)} outstanding debt. Withdrawals are paused until recovered.`,
+    relatedOrderId: input.orderId,
+    href: "/dashboard/wallet",
+    dedupeKey: `wallet_debt:${input.orderId}`,
+  });
 }

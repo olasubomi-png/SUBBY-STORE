@@ -12,6 +12,33 @@ import {
   verifyPaystackTransfer, isDefinitiveTransferRejection,
 } from "@/lib/server/paystack";
 
+async function softNotifyWithdrawal(
+  kind: "requested" | "succeeded" | "failed" | "reversed",
+  storeId: number,
+  reference: string,
+  amountKobo: number,
+) {
+  try {
+    const n = await import("@/lib/server/notifications");
+    if (kind === "requested") await n.notifyWithdrawalRequested({ storeId, reference, amountKobo });
+    else if (kind === "succeeded") await n.notifyWithdrawalSucceeded({ storeId, reference, amountKobo });
+    else if (kind === "failed") await n.notifyWithdrawalFailed({ storeId, reference, amountKobo });
+    else if (kind === "reversed") await n.notifyWithdrawalReversed({ storeId, reference, amountKobo });
+  } catch {
+    /* non-blocking */
+  }
+}
+
+async function softNotifyEarning(storeId: number, orderId: number, amountKobo: number) {
+  try {
+    const n = await import("@/lib/server/notifications");
+    await n.notifyWalletEarning({ storeId, orderId, amountKobo });
+  } catch {
+    /* non-blocking */
+  }
+}
+
+
 export function minWithdrawalKobo(): number {
   const raw = process.env.MIN_WITHDRAWAL_KOBO?.trim();
   if (raw && /^\d+$/.test(raw)) {
@@ -90,6 +117,7 @@ export async function creditOrderEarning(input: { storeId: number; orderId: numb
     const next = { ...ms.sellerWallets[idx]!, availableKobo: ms.sellerWallets[idx]!.availableKobo + credit, lifetimeEarnedKobo: ms.sellerWallets[idx]!.lifetimeEarnedKobo + input.amountKobo, debtKobo: debt, updatedAt: new Date() };
     ms.sellerWallets[idx] = next;
     pushLedger({ storeId: input.storeId, walletId: wallet.id, entryType: "order_earning", direction: "credit", amountKobo: input.amountKobo, balanceAfterAvailableKobo: next.availableKobo, balanceAfterPendingKobo: next.pendingKobo, orderId: input.orderId, reference: input.paymentReference || `order_${input.orderId}`, idempotencyKey: key });
+    void softNotifyEarning(input.storeId, input.orderId, input.amountKobo);
     return { credited: true, wallet: next };
   }
   const db = getDb();
@@ -324,6 +352,7 @@ export async function completeWithdrawal(input: { reference: string; transferCod
     const sidx = ms.sellerWallets.findIndex((w) => w.storeId === ms.withdrawals[widx]!.storeId);
     ms.sellerWallets[sidx] = { ...ms.sellerWallets[sidx]!, lifetimeWithdrawnKobo: ms.sellerWallets[sidx]!.lifetimeWithdrawnKobo + amount, updatedAt: new Date() };
     pushLedger({ storeId: ms.withdrawals[widx]!.storeId, walletId: ms.withdrawals[widx]!.walletId, entryType: "withdrawal_completed", direction: "debit", amountKobo: amount, balanceAfterAvailableKobo: ms.sellerWallets[sidx]!.availableKobo, balanceAfterPendingKobo: ms.sellerWallets[sidx]!.pendingKobo, withdrawalId: ms.withdrawals[widx]!.id, reference: input.reference, idempotencyKey: `withdrawal_completed:${input.reference}`, providerEventId: input.providerEventId });
+    void softNotifyWithdrawal("succeeded", ms.withdrawals[widx]!.storeId, input.reference, amount);
     return { alreadyProcessed: false, withdrawal: ms.withdrawals[widx]! };
   }
   const db = getDb();
