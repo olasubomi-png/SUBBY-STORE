@@ -54,10 +54,16 @@ describe("security", () => {
     await creditOrderEarning({ storeId: a.shop.id, orderId: 99, amountKobo: 100_000 });
     await expect(getWalletSummary(a.shop.id, b.user.id)).rejects.toThrow(/Store not found/);
     await verifyAndSaveBankAccount({ ownerId: a.user.id, storeId: a.shop.id, bankCode: "058", bankName: "GTBank", accountNumber: "0123456789" });
+    // Only order 40 earning — withdraw all, then refund creates full debt
     await creditOrderEarning({ storeId: a.shop.id, orderId: 40, amountKobo: 200_000 });
-    const { withdrawal } = await requestWithdrawal({ ownerId: a.user.id, storeId: a.shop.id, amountKobo: 200_000, idempotencyKey: "debtpath1" });
+    const { withdrawal } = await requestWithdrawal({
+      ownerId: a.user.id, storeId: a.shop.id, amountKobo: 300_000, idempotencyKey: "debtpath1",
+    });
     await completeWithdrawal({ reference: withdrawal.reference, providerEventId: "cdebt" });
     await debitOrderRefund({ storeId: a.shop.id, orderId: 40, amountKobo: 200_000 });
-    expect((await getWalletSummary(a.shop.id, a.user.id)).debtKobo).toBe(200_000);
+    const sum = await getWalletSummary(a.shop.id, a.user.id);
+    expect(sum.availableKobo).toBe(0);
+    expect(sum.debtKobo).toBe(200_000);
+    expect(sum.canWithdraw).toBe(false);
   });
 });
