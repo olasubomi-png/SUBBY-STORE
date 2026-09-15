@@ -497,6 +497,7 @@ export const withdrawals = pgTable("withdrawals", {
   netKobo: integer("net_kobo").notNull(),
   status: varchar("status", { length: 20 }).notNull().default("pending"),
   reference: varchar("reference", { length: 120 }).notNull(),
+  clientIdempotencyKey: varchar("client_idempotency_key", { length: 80 }),
   transferCode: varchar("transfer_code", { length: 80 }),
   recipientCode: varchar("recipient_code", { length: 80 }),
   failureReason: text("failure_reason"),
@@ -508,3 +509,18 @@ export const withdrawals = pgTable("withdrawals", {
   reversedAt: timestamp("reversed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [uniqueIndex("withdrawals_reference_uidx").on(t.reference), uniqueIndex("withdrawals_transfer_code_uidx").on(t.transferCode), index("withdrawals_store_idx").on(t.storeId)]);
+
+/** Durable outbox: paid order earning that must still be applied to the seller wallet. */
+export const pendingWalletCredits = pgTable("pending_wallet_credits", {
+  id: serial("id").primaryKey(),
+  storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+  orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  amountKobo: integer("amount_kobo").notNull(),
+  paymentReference: varchar("payment_reference", { length: 160 }),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [uniqueIndex("pending_wallet_credits_order_uidx").on(t.orderId), index("pending_wallet_credits_status_idx").on(t.status)]);

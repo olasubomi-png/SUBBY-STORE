@@ -9,6 +9,7 @@ import * as mem from "@/lib/server/memory-repo";
 import { assertPositiveKobo } from "@/lib/money";
 import {
   listPaystackBanks, resolvePaystackAccount, createPaystackTransferRecipient, initiatePaystackTransfer,
+  verifyPaystackTransfer, isDefinitiveTransferRejection,
 } from "@/lib/server/paystack";
 
 export function minWithdrawalKobo(): number {
@@ -186,10 +187,12 @@ export async function verifyAndSaveBankAccount(input: { ownerId: number; storeId
     ms.sellerBankAccounts.push(row);
     return { id: row.id, bankCode: row.bankCode, bankName: row.bankName, accountNumberLast4: last4, accountName: row.accountName };
   }
-  await getDb().update(sellerBankAccounts).set({ active: false, updatedAt: new Date() }).where(eq(sellerBankAccounts.storeId, input.storeId));
-  const inserted = await getDb().insert(sellerBankAccounts).values({ storeId: input.storeId, bankCode: input.bankCode, bankName: input.bankName, accountNumberLast4: last4, accountName: resolved.accountName, recipientCode: recipient.recipientCode, active: true }).returning();
-  const row = inserted[0]!;
-  return { id: row.id, bankCode: row.bankCode, bankName: row.bankName, accountNumberLast4: row.accountNumberLast4, accountName: row.accountName };
+  return getDb().transaction(async (tx) => {
+    await tx.update(sellerBankAccounts).set({ active: false, updatedAt: new Date() }).where(eq(sellerBankAccounts.storeId, input.storeId));
+    const inserted = await tx.insert(sellerBankAccounts).values({ storeId: input.storeId, bankCode: input.bankCode, bankName: input.bankName, accountNumberLast4: last4, accountName: resolved.accountName, recipientCode: recipient.recipientCode, active: true }).returning();
+    const row = inserted[0]!;
+    return { id: row.id, bankCode: row.bankCode, bankName: row.bankName, accountNumberLast4: last4, accountName: row.accountName };
+  });
 }
 
 export async function getActiveBankAccount(storeId: number, ownerId: number) {
@@ -229,8 +232,12 @@ export async function requestWithdrawal(input: { ownerId: number; storeId: numbe
 
   if (useMemory()) {
     const ms = mem.getMemoryStore();
-    if (ms.withdrawals.some((w) => w.reference === reference)) {
-      return { withdrawal: ms.withdrawals.find((w) => w.reference === reference)!, alreadyExists: true as const };
+    const existingWd = ms.withdrawals.find((w) => w.reference === reference);
+    if (existingWd) {
+      if (existingWd.amountKobo !== input.amountKobo) {
+        throw new Error("Idempotency key conflict: amount differs from original request");
+      }
+      return { withdrawal: existingWd, alreadyExists: true as const };
     }
     const idx = ms.sellerWallets.findIndex((w) => w.id === wallet.id);
     if (ms.sellerWallets[idx]!.availableKobo < input.amountKobo) throw new Error("Insufficient available balance");
@@ -245,15 +252,31 @@ export async function requestWithdrawal(input: { ownerId: number; storeId: numbe
       ms.withdrawals[widx] = { ...ms.withdrawals[widx]!, transferCode: tr.transferCode, status: "processing", updatedAt: new Date() };
       return { withdrawal: ms.withdrawals[widx]!, alreadyExists: false as const };
     } catch (e) {
-      await releaseHoldMem(input.storeId, wd.id, reference, input.amountKobo, e instanceof Error ? e.message : "Transfer failed");
-      return { withdrawal: ms.withdrawals.find((w) => w.id === wd.id)!, alreadyExists: false as const };
+      if (isDefinitiveTransferRejection(e)) {
+        await releaseHoldMem(input.storeId, wd.id, reference, input.amountKobo, e instanceof Error ? e.message : "Transfer rejected");
+        return { withdrawal: ms.withdrawals.find((w) => w.id === wd.id)!, alreadyExists: false as const };
+      }
+      // Ambiguous — keep hold, mark provider_unknown
+      const widx2 = ms.withdrawals.findIndex((w) => w.id === wd.id);
+      ms.withdrawals[widx2] = {
+        ...ms.withdrawals[widx2]!,
+        status: "provider_unknown",
+        failureReason: e instanceof Error ? e.message.slice(0, 200) : "provider_unknown",
+        updatedAt: new Date(),
+      };
+      return { withdrawal: ms.withdrawals[widx2]!, alreadyExists: false as const };
     }
   }
 
   const db = getDb();
   const reserved = await db.transaction(async (tx) => {
     const existing = await tx.select().from(withdrawals).where(eq(withdrawals.reference, reference)).limit(1);
-    if (existing[0]) return { already: true as const, withdrawal: existing[0] };
+    if (existing[0]) {
+      if (existing[0].amountKobo !== input.amountKobo) {
+        throw new Error("Idempotency key conflict: amount differs from original request");
+      }
+      return { already: true as const, withdrawal: existing[0] };
+    }
     const locked = await tx.select().from(sellerWallets).where(eq(sellerWallets.storeId, input.storeId)).limit(1).for("update");
     const w = locked[0];
     if (!w || w.availableKobo < input.amountKobo) throw new Error("Insufficient available balance");
@@ -270,9 +293,18 @@ export async function requestWithdrawal(input: { ownerId: number; storeId: numbe
     const updated = await getDb().update(withdrawals).set({ transferCode: tr.transferCode, status: "processing", updatedAt: new Date() }).where(eq(withdrawals.id, reserved.withdrawal.id)).returning();
     return { withdrawal: updated[0]!, alreadyExists: false as const };
   } catch (e) {
-    await failWithdrawal({ reference, reason: e instanceof Error ? e.message : "Transfer failed" });
-    const failed = await getDb().select().from(withdrawals).where(eq(withdrawals.id, reserved.withdrawal.id)).limit(1);
-    return { withdrawal: failed[0]!, alreadyExists: false as const };
+    if (isDefinitiveTransferRejection(e)) {
+      await failWithdrawal({ reference, reason: e instanceof Error ? e.message : "Transfer rejected" });
+      const failed = await getDb().select().from(withdrawals).where(eq(withdrawals.id, reserved.withdrawal.id)).limit(1);
+      return { withdrawal: failed[0]!, alreadyExists: false as const };
+    }
+    // Ambiguous: keep funds reserved under provider_unknown
+    const updated = await getDb().update(withdrawals).set({
+      status: "provider_unknown",
+      failureReason: e instanceof Error ? e.message.slice(0, 200) : "provider_unknown",
+      updatedAt: new Date(),
+    }).where(eq(withdrawals.id, reserved.withdrawal.id)).returning();
+    return { withdrawal: updated[0]!, alreadyExists: false as const };
   }
 }
 
@@ -307,7 +339,7 @@ export async function completeWithdrawal(input: { reference: string; transferCod
     const wd = rows[0];
     if (!wd) throw new Error("withdrawal_not_found");
     if (wd.status === "success") return { alreadyProcessed: true, withdrawal: wd };
-    if (wd.status === "failed") throw new Error("cannot_complete_failed_withdrawal");
+    if (wd.status === "failed" || wd.status === "reversed") throw new Error(`cannot_complete_${wd.status}_withdrawal`);
     await tx.update(withdrawals).set({ status: "success", transferCode: input.transferCode || wd.transferCode, completedAt: new Date(), providerEventId: input.providerEventId ?? null, updatedAt: new Date() }).where(eq(withdrawals.id, wd.id));
     const locked = await tx.select().from(sellerWallets).where(eq(sellerWallets.id, wd.walletId)).limit(1).for("update");
     const w = locked[0]!;
@@ -326,7 +358,7 @@ export async function failWithdrawal(input: { reference: string; reason?: string
     const wd = ms.withdrawals.find((w) => w.reference === input.reference);
     if (!wd) throw new Error("withdrawal_not_found");
     if (wd.status === "failed") return { alreadyProcessed: true, withdrawal: wd };
-    if (wd.status === "success") throw new Error("cannot_fail_successful_withdrawal");
+    if (wd.status === "success" || wd.status === "reversed") throw new Error("cannot_fail_successful_withdrawal");
     await releaseHoldMem(wd.storeId, wd.id, input.reference, wd.amountKobo, input.reason || "Transfer failed");
     return { alreadyProcessed: false, withdrawal: ms.withdrawals.find((w) => w.id === wd.id)! };
   }
@@ -390,4 +422,156 @@ export async function reverseWithdrawal(input: { reference: string; providerEven
     const updated = await tx.select().from(withdrawals).where(eq(withdrawals.id, wd.id)).limit(1);
     return { alreadyProcessed: false, withdrawal: updated[0]! };
   });
+}
+
+
+/** Durable outbox for earnings that failed after order paid. */
+export async function enqueuePendingWalletCredit(input: {
+  storeId: number; orderId: number; amountKobo: number; paymentReference?: string | null;
+}) {
+  assertPositiveKobo(input.amountKobo);
+  if (useMemory()) {
+    const ms = mem.getMemoryStore();
+    if (!ms.pendingWalletCredits) (ms as { pendingWalletCredits: unknown[] }).pendingWalletCredits = [];
+    const list = ms.pendingWalletCredits as Array<{ orderId: number; status: string }>;
+    if (list.some((p) => p.orderId === input.orderId)) return { enqueued: false };
+    list.push({
+      id: (ms.seq as { pendingWalletCredit?: number }).pendingWalletCredit
+        ? ((ms.seq as { pendingWalletCredit: number }).pendingWalletCredit++)
+        : 1,
+      storeId: input.storeId,
+      orderId: input.orderId,
+      amountKobo: input.amountKobo,
+      paymentReference: input.paymentReference ?? null,
+      status: "pending",
+      attempts: 0,
+      lastError: null,
+      createdAt: new Date(),
+      processedAt: null,
+      updatedAt: new Date(),
+    } as never);
+    return { enqueued: true };
+  }
+  try {
+    const { pendingWalletCredits } = await import("@/db/schema");
+    await getDb().insert(pendingWalletCredits).values({
+      storeId: input.storeId,
+      orderId: input.orderId,
+      amountKobo: input.amountKobo,
+      paymentReference: input.paymentReference ?? null,
+      status: "pending",
+    }).onConflictDoNothing();
+    return { enqueued: true };
+  } catch {
+    return { enqueued: false };
+  }
+}
+
+export async function processPendingWalletCredits(limit = 50) {
+  let processed = 0, failed = 0;
+  if (useMemory()) {
+    const ms = mem.getMemoryStore();
+    const list = (ms.pendingWalletCredits || []) as Array<{
+      orderId: number; storeId: number; amountKobo: number; paymentReference: string | null; status: string; attempts: number; lastError: string | null; updatedAt: Date; processedAt: Date | null;
+    }>;
+    for (const p of list.filter((x) => x.status === "pending").slice(0, limit)) {
+      try {
+        await creditOrderEarning({ storeId: p.storeId, orderId: p.orderId, amountKobo: p.amountKobo, paymentReference: p.paymentReference });
+        p.status = "processed"; p.processedAt = new Date(); processed++;
+      } catch (e) {
+        p.attempts += 1; p.lastError = e instanceof Error ? e.message : "unknown"; p.updatedAt = new Date(); failed++;
+      }
+    }
+    return { processed, failed };
+  }
+  const { pendingWalletCredits } = await import("@/db/schema");
+  const { eq } = await import("drizzle-orm");
+  const rows = await getDb().select().from(pendingWalletCredits).where(eq(pendingWalletCredits.status, "pending")).limit(limit);
+  for (const p of rows) {
+    try {
+      await creditOrderEarning({ storeId: p.storeId, orderId: p.orderId, amountKobo: p.amountKobo, paymentReference: p.paymentReference });
+      await getDb().update(pendingWalletCredits).set({ status: "processed", processedAt: new Date(), updatedAt: new Date() }).where(eq(pendingWalletCredits.id, p.id));
+      processed++;
+    } catch (e) {
+      await getDb().update(pendingWalletCredits).set({
+        attempts: (p.attempts ?? 0) + 1,
+        lastError: e instanceof Error ? e.message.slice(0, 500) : "unknown",
+        updatedAt: new Date(),
+      }).where(eq(pendingWalletCredits.id, p.id));
+      failed++;
+    }
+  }
+  return { processed, failed };
+}
+
+export async function ensureOrderEarningCredited(input: {
+  storeId: number; orderId: number; amountKobo: number; paymentReference?: string | null;
+}) {
+  try {
+    const r = await creditOrderEarning(input);
+    return { credited: r.credited, pending: false };
+  } catch {
+    await enqueuePendingWalletCredit(input);
+    return { credited: false, pending: true };
+  }
+}
+
+export async function reconcileWithdrawal(reference: string) {
+  if (useMemory()) {
+    const ms = mem.getMemoryStore();
+    const wd = ms.withdrawals.find((w) => w.reference === reference);
+    if (!wd) throw new Error("withdrawal_not_found");
+    if (wd.status === "success" || wd.status === "failed" || wd.status === "reversed") {
+      return { status: wd.status, alreadyResolved: true, withdrawal: wd };
+    }
+    if (reference.includes("_fail_")) {
+      const r = await failWithdrawal({ reference, reason: "Reconciled as failed (mock)" });
+      return { status: "failed", alreadyResolved: false, withdrawal: r.withdrawal };
+    }
+    const r = await completeWithdrawal({ reference, transferCode: wd.transferCode });
+    return { status: "success", alreadyResolved: false, withdrawal: r.withdrawal };
+  }
+  const rows = await getDb().select().from(withdrawals).where(eq(withdrawals.reference, reference)).limit(1);
+  const wd = rows[0];
+  if (!wd) throw new Error("withdrawal_not_found");
+  if (wd.status === "success" || wd.status === "failed" || wd.status === "reversed") {
+    return { status: wd.status, alreadyResolved: true, withdrawal: wd };
+  }
+  const verified = await verifyPaystackTransfer(reference);
+  if (!verified) return { status: wd.status, alreadyResolved: false, withdrawal: wd };
+  const st = (verified.status || "").toLowerCase();
+  if (st === "success" || st === "successful") {
+    const r = await completeWithdrawal({ reference, transferCode: verified.transfer_code || wd.transferCode });
+    return { status: "success", alreadyResolved: false, withdrawal: r.withdrawal };
+  }
+  if (st === "failed" || st === "reversed" || st === "abandoned") {
+    const r = await failWithdrawal({ reference, reason: `Paystack status: ${st}` });
+    return { status: "failed", alreadyResolved: false, withdrawal: r.withdrawal };
+  }
+  return { status: wd.status, alreadyResolved: false, withdrawal: wd };
+}
+
+export async function findPaidOrdersMissingEarnings(limit = 50) {
+  if (useMemory()) {
+    const ms = mem.getMemoryStore();
+    const out: Array<{ orderId: number; storeId: number; totalKobo: number; paymentReference: string | null }> = [];
+    for (const o of ms.orders.filter((x) => x.paymentStatus === "paid")) {
+      const has = ms.walletLedger.some((e) => e.orderId === o.id && e.entryType === "order_earning");
+      if (!has) out.push({ orderId: o.id, storeId: o.storeId, totalKobo: o.totalKobo, paymentReference: null });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+  return [];
+}
+
+export async function findStuckWithdrawals(olderThanMinutes = 30, limit = 50) {
+  if (useMemory()) {
+    const ms = mem.getMemoryStore();
+    const cutoff = Date.now() - olderThanMinutes * 60_000;
+    return ms.withdrawals
+      .filter((w) => (w.status === "processing" || w.status === "provider_unknown") && w.createdAt.getTime() < cutoff)
+      .slice(0, limit);
+  }
+  return [];
 }

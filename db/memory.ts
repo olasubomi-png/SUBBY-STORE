@@ -209,10 +209,15 @@ export type MemoryStore = {
   withdrawals: Array<{
     id: number; storeId: number; walletId: number; bankAccountId: number | null;
     amountKobo: number; feeKobo: number; netKobo: number; status: string;
-    reference: string; transferCode: string | null; recipientCode: string | null;
+    reference: string; clientIdempotencyKey?: string | null; transferCode: string | null; recipientCode: string | null;
     failureReason: string | null; providerEventId: string | null;
     createdAt: Date; processingAt: Date | null; completedAt: Date | null;
     failedAt: Date | null; reversedAt: Date | null; updatedAt: Date;
+  }>;
+  pendingWalletCredits: Array<{
+    id: number; storeId: number; orderId: number; amountKobo: number;
+    paymentReference: string | null; status: string; attempts: number;
+    lastError: string | null; createdAt: Date; processedAt: Date | null; updatedAt: Date;
   }>;
   seq: {
     user: number; store: number; product: number; order: number; item: number;
@@ -220,6 +225,7 @@ export type MemoryStore = {
     storeEvent: number; notification: number; campaign: number; campaignProduct: number;
     subscriptionPlan: number; subscription: number; billingTransaction: number; subscriptionEvent: number;
     sellerWallet: number; walletLedger: number; sellerBankAccount: number; withdrawal: number;
+    pendingWalletCredit: number;
   };
 };
 
@@ -228,11 +234,11 @@ export function createMemoryStore(): MemoryStore {
     users: [], stores: [], products: [], orders: [], orderItems: [], payments: [],
     productImages: [], coupons: [], storeEvents: [], notifications: [], couponProducts: [],
     campaigns: [], campaignProducts: [], subscriptionPlans: [], subscriptions: [],
-    billingTransactions: [], subscriptionEvents: [], sellerWallets: [], walletLedger: [], sellerBankAccounts: [], withdrawals: [],
+    billingTransactions: [], subscriptionEvents: [], sellerWallets: [], walletLedger: [], sellerBankAccounts: [], withdrawals: [], pendingWalletCredits: [],
     seq: {
       user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1,
       coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1, campaign: 1, campaignProduct: 1,
-      subscriptionPlan: 1, subscription: 1, billingTransaction: 1, subscriptionEvent: 1, sellerWallet: 1, walletLedger: 1, sellerBankAccount: 1, withdrawal: 1,
+      subscriptionPlan: 1, subscription: 1, billingTransaction: 1, subscriptionEvent: 1, sellerWallet: 1, walletLedger: 1, sellerBankAccount: 1, withdrawal: 1, pendingWalletCredit: 1,
     },
   };
 }

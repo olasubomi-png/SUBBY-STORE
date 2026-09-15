@@ -74,7 +74,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: true, type: "transfer_reversed", alreadyProcessed: result.alreadyProcessed });
       } catch (e) {
         const msg = e instanceof Error ? e.message : "transfer_webhook_failed";
-        if (msg === "withdrawal_not_found") return NextResponse.json({ ok: true, unknown_withdrawal: true });
+        if (
+          msg === "withdrawal_not_found" ||
+          msg.startsWith("cannot_complete_") ||
+          msg === "cannot_fail_successful_withdrawal" ||
+          msg === "can_only_reverse_success"
+        ) {
+          return NextResponse.json({ ok: true, ignored_transition: true, reason: msg });
+        }
         return NextResponse.json({ error: msg }, { status: 400 });
       }
     }

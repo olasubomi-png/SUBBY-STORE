@@ -52,25 +52,57 @@ export function isPaystackMock(): boolean {
   return isPaystackMockMode();
 }
 
+export class PaystackApiError extends Error {
+  readonly statusCode: number;
+  readonly definitive: boolean;
+  constructor(message: string, statusCode: number, definitive?: boolean) {
+    super(message);
+    this.name = "PaystackApiError";
+    this.statusCode = statusCode;
+    this.definitive =
+      definitive ??
+      (statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429);
+  }
+}
+
+export function isDefinitiveTransferRejection(err: unknown): boolean {
+  if (err instanceof PaystackApiError) return err.definitive;
+  if (err instanceof Error) {
+    const m = err.message.toLowerCase();
+    if (m.includes("rejected by provider")) return true;
+    if (m.includes("insufficient balance") || m.includes("invalid recipient")) return true;
+    if (m.includes("validation") || m.includes("duplicate")) return true;
+    if (m.includes("timeout") || m.includes("network") || m.includes("econnreset")) return false;
+    if (m.includes("fetch failed") || m.includes("socket")) return false;
+  }
+  return false;
+}
+
 async function paystackFetch<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const res = await fetch(`https://api.paystack.co${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${secretKey()}`,
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-  });
-  const data = (await res.json()) as {
-    status: boolean;
-    message?: string;
-    data?: T;
-  };
+  let res: Response;
+  try {
+    res = await fetch(`https://api.paystack.co${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${secretKey()}`,
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
+  } catch (e) {
+    throw new PaystackApiError(e instanceof Error ? e.message : "network_error", 0, false);
+  }
+  let data: { status: boolean; message?: string; data?: T };
+  try {
+    data = (await res.json()) as { status: boolean; message?: string; data?: T };
+  } catch {
+    throw new PaystackApiError(`Paystack ${path} invalid JSON`, res.status, res.status >= 500);
+  }
   if (!res.ok || !data.status || data.data === undefined) {
-    throw new Error(data.message || `Paystack ${path} failed`);
+    throw new PaystackApiError(data.message || `Paystack ${path} failed`, res.status);
   }
   return data.data;
 }
@@ -417,9 +449,54 @@ export async function createPaystackTransferRecipient(input: { name: string; acc
 }
 export async function initiatePaystackTransfer(input: { amountKobo: number; recipientCode: string; reference: string; reason?: string }) {
   if (isPaystackMock()) {
-    if (input.reference.includes("_fail_")) throw new Error("Transfer rejected by provider (mock)");
+    if (input.reference.includes("_fail_")) {
+      throw new PaystackApiError("Transfer rejected by provider (mock)", 400, true);
+    }
+    if (input.reference.includes("_timeout_") || input.reference.includes("_ambiguous_")) {
+      throw new PaystackApiError("Transfer request timeout (mock)", 0, false);
+    }
     return { transferCode: `TRF_mock_${input.reference.slice(0, 20)}`, reference: input.reference, status: "pending" };
   }
-  const data = await paystackFetch<{ transfer_code?: string; reference?: string; status?: string }>("/transfer", { method: "POST", body: JSON.stringify({ source: "balance", amount: input.amountKobo, recipient: input.recipientCode, reference: input.reference, reason: input.reason || "Seller withdrawal", currency: "NGN" }) });
+  const data = await paystackFetch<{ transfer_code?: string; reference?: string; status?: string }>("/transfer", {
+    method: "POST",
+    body: JSON.stringify({
+      source: "balance",
+      amount: input.amountKobo,
+      recipient: input.recipientCode,
+      reference: input.reference,
+      reason: input.reason || "Seller withdrawal",
+      currency: "NGN",
+    }),
+  });
   return { transferCode: data.transfer_code ?? null, reference: data.reference || input.reference, status: data.status || "pending" };
+}
+
+export async function verifyPaystackTransfer(reference: string): Promise<{
+  status: string;
+  transfer_code?: string | null;
+  reference?: string;
+  amount?: number;
+} | null> {
+  if (isPaystackMock()) {
+    if (reference.includes("_fail_")) return { status: "failed", reference, transfer_code: null };
+    if (reference.includes("_unknown_")) return null;
+    return { status: "success", reference, transfer_code: `TRF_mock_${reference.slice(0, 20)}` };
+  }
+  try {
+    const data = await paystackFetch<{
+      status?: string;
+      transfer_code?: string;
+      reference?: string;
+      amount?: number;
+    }>(`/transfer/verify/${encodeURIComponent(reference)}`);
+    return {
+      status: data.status || "pending",
+      transfer_code: data.transfer_code ?? null,
+      reference: data.reference || reference,
+      amount: data.amount,
+    };
+  } catch (e) {
+    if (e instanceof PaystackApiError && e.statusCode === 404) return null;
+    return null;
+  }
 }
