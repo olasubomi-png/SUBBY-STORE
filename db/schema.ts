@@ -303,3 +303,45 @@ export const notifications = pgTable(
     uniqueIndex("notifications_dedupe_uidx").on(t.storeId, t.dedupeKey),
   ]
 );
+
+
+export const campaigns = pgTable(
+  "campaigns",
+  {
+    id: serial("id").primaryKey(),
+    storeId: integer("store_id").notNull().references(() => stores.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 120 }).notNull(),
+    slug: varchar("slug", { length: 100 }).notNull(),
+    description: text("description").default("").notNull(),
+    campaignType: varchar("campaign_type", { length: 40 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("draft"),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+    bannerUrl: text("banner_url"),
+    announcementText: text("announcement_text"),
+    couponId: integer("coupon_id").references(() => coupons.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("campaigns_store_slug_uidx").on(t.storeId, t.slug),
+    index("campaigns_store_idx").on(t.storeId),
+    index("campaigns_store_status_idx").on(t.storeId, t.status),
+    index("campaigns_starts_idx").on(t.startsAt),
+    index("campaigns_ends_idx").on(t.endsAt),
+  ]
+);
+
+export const campaignProducts = pgTable(
+  "campaign_products",
+  {
+    id: serial("id").primaryKey(),
+    campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+    productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    uniqueIndex("campaign_products_uidx").on(t.campaignId, t.productId),
+    index("campaign_products_campaign_idx").on(t.campaignId),
+    index("campaign_products_product_idx").on(t.productId),
+  ]
+);

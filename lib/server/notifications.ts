@@ -15,7 +15,10 @@ export type NotificationType =
   | "payment_failed"
   | "low_stock"
   | "out_of_stock"
-  | "coupon_expiring";
+  | "coupon_expiring"
+  | "campaign_scheduled"
+  | "campaign_started"
+  | "campaign_expired";
 
 export type NotificationRow = {
   id: number;

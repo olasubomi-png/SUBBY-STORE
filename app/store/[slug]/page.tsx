@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStoreBySlug, listProducts } from "@/lib/server/repo";
 import { listPublicStorePromotions } from "@/lib/server/public-promotions";
+import { listPublicCampaignsForStore } from "@/lib/server/campaigns";
 import { resolveStoreSeo } from "@/lib/storefront/seo";
 import { Storefront } from "@/components/Storefront";
 
@@ -39,9 +40,10 @@ export default async function PublicStorePage({ params }: Props) {
   const { slug } = await params;
   const store = await getStoreBySlug(slug);
   if (!store) notFound();
-  const [productRows, promotions] = await Promise.all([
+  const [productRows, promotions, campaigns] = await Promise.all([
     listProducts(store.id, true),
     listPublicStorePromotions(store.id),
+    listPublicCampaignsForStore(store.id),
   ]);
   const products = productRows.map((p) => ({
     id: p.id,
@@ -74,6 +76,7 @@ export default async function PublicStorePage({ params }: Props) {
       }}
       products={products}
       promotions={promotions}
+      campaigns={campaigns}
     />
   );
 }

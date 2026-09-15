@@ -24,6 +24,11 @@ import {
   type PublicPromotion,
 } from "@/lib/storefront/promotions-display";
 
+export type PublicCampaignBanner = {
+  id: number; name: string; slug: string; description: string; campaignType: string;
+  bannerUrl: string | null; announcementText: string | null; couponCode?: string | null; couponLabel?: string | null;
+};
+
 export type PublicProduct = DiscoveryProduct;
 
 export type PublicStore = StorefrontHeaderProps & {
@@ -48,10 +53,12 @@ export function Storefront({
   store,
   products,
   promotions = [],
+  campaigns = [],
 }: {
   store: PublicStore;
   products: PublicProduct[];
   promotions?: PublicPromotion[];
+  campaigns?: PublicCampaignBanner[];
 }) {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [wishlist, setWishlist] = useState<number[]>([]);
@@ -159,6 +166,27 @@ export function Storefront({
   return (
     <div className="mx-auto min-h-screen max-w-5xl px-3 pb-24 sm:px-4">
       <StorefrontHeader {...store} />
+
+      {campaigns.length > 0 ? (
+        <div className="space-y-2">
+          {campaigns.slice(0, 3).map((c) => (
+            <Link key={c.id} href={`/store/${store.slug}/campaign/${c.slug}`}
+              onClick={() => { void trackStoreEvent({ storeSlug: store.slug, eventType: "campaign_click", metadata: { campaignSlug: c.slug } }); }}
+              className="block overflow-hidden rounded-2xl border border-brand-100 bg-gradient-to-r from-brand-50 to-white p-4 transition hover:border-brand-300">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Promotion</p>
+                  <p className="mt-0.5 font-semibold text-ink-950">{c.name}</p>
+                  {(c.announcementText || c.description) && <p className="mt-1 line-clamp-2 text-sm text-ink-600">{c.announcementText || c.description}</p>}
+                  {c.couponCode ? <p className="mt-2 text-xs font-medium text-emerald-800">Code {c.couponCode}{c.couponLabel ? ` · ${c.couponLabel}` : ""}</p> : null}
+                </div>
+                <span className="shrink-0 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white">View</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Link

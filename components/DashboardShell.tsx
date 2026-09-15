@@ -12,6 +12,7 @@ const links = [
   { href: "/dashboard/inventory", label: "Inventory" },
   { href: "/dashboard/products", label: "Products" },
   { href: "/dashboard/coupons", label: "Coupons" },
+  { href: "/dashboard/marketing", label: "Marketing" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 

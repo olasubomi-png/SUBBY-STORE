@@ -146,6 +146,27 @@ export type MemoryStore = {
     couponId: number;
     productId: number;
   }>;
+  campaigns: Array<{
+    id: number;
+    storeId: number;
+    name: string;
+    slug: string;
+    description: string;
+    campaignType: string;
+    status: string;
+    startsAt: Date | null;
+    endsAt: Date | null;
+    bannerUrl: string | null;
+    announcementText: string | null;
+    couponId: number | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }>;
+  campaignProducts: Array<{
+    id: number;
+    campaignId: number;
+    productId: number;
+  }>;
   seq: {
     user: number;
     store: number;
@@ -158,6 +179,8 @@ export type MemoryStore = {
     productImage: number;
     storeEvent: number;
     notification: number;
+    campaign: number;
+    campaignProduct: number;
   };
 };
 
@@ -174,6 +197,8 @@ export function createMemoryStore(): MemoryStore {
     storeEvents: [],
     notifications: [],
     couponProducts: [],
-    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1 },
+    campaigns: [],
+    campaignProducts: [],
+    seq: { user: 1, store: 1, product: 1, order: 1, item: 1, payment: 1, productImage: 1, coupon: 1, couponProduct: 1, storeEvent: 1, notification: 1, campaign: 1, campaignProduct: 1 },
   };
 }

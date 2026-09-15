@@ -13,6 +13,8 @@ const ALLOWED = new Set([
   "wishlist_removed",
   "share_product",
   "share_store",
+  "campaign_view",
+  "campaign_click",
 ]);
 
 const schema = z.object({
