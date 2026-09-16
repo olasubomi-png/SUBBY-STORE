@@ -134,13 +134,22 @@ Do **not** blindly “fix” ambiguous amount mismatches.
 
 ## 7. Migration instructions
 
-Apply in order on a maintenance window (not done by this phase):
+Apply in order on a maintenance window:
 
 1. `0013_seller_wallet.sql` — wallets, ledger, banks, withdrawals  
 2. `0014_wallet_hardening.sql` — pending credits, client idempotency, one active bank  
 3. `0015_wallet_ops_indexes.sql` — status / ledger lookup indexes  
 
-Verify with schema in `db/schema.ts`. **Do not** apply to production from this agent session.
+Recommended command (from the repo root, with your **production** `DATABASE_URL`):
+
+```bash
+DATABASE_URL="postgresql://..." npm run db:migrate
+```
+
+This records applied files in `schema_migrations` and is safe to re-run.  
+If you see `relation "seller_wallets" does not exist` on `/dashboard/wallet`, these migrations have not been applied yet.
+
+Verify with schema in `db/schema.ts`.
 
 ---
 

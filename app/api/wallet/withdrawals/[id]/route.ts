@@ -1,3 +1,4 @@
+import { mapWalletError } from "@/lib/server/wallet-errors";
 import { NextResponse } from "next/server";
 import { resolveSellerStores } from "@/lib/server/store-resolve";
 import { getWithdrawalDetail } from "@/lib/server/wallet-ops";
@@ -14,6 +15,7 @@ export async function GET(
     const detail = await getWithdrawalDetail(resolved.primary.id, resolved.session.userId, Number(id));
     return NextResponse.json(detail);
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Not found" }, { status: 404 });
+    const mapped = mapWalletError(e);
+    return NextResponse.json({ error: mapped.message }, { status: mapped.status === 400 ? 404 : mapped.status });
   }
 }

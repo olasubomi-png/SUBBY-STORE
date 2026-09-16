@@ -1,3 +1,4 @@
+import { mapWalletError } from "@/lib/server/wallet-errors";
 import { NextResponse } from "next/server";
 import { resolveSellerStores } from "@/lib/server/store-resolve";
 import { listLedgerPage } from "@/lib/server/wallet-ops";
@@ -14,6 +15,7 @@ export async function GET(req: Request) {
     const page = await listLedgerPage(resolved.primary.id, resolved.session.userId, { limit, cursor });
     return NextResponse.json(page);
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Failed" }, { status: 400 });
+    const mapped = mapWalletError(e);
+    return NextResponse.json({ error: mapped.message }, { status: mapped.status });
   }
 }

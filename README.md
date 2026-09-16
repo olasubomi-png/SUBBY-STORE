@@ -52,3 +52,20 @@ Paystack mock mode activates when `PAYSTACK_SECRET_KEY` contains `REPLACE` or eq
 ## Money
 
 All amounts are **integer kobo** (1 NGN = 100 kobo). No floating-point wallet math.
+
+
+## Wallet database migrations
+
+Seller wallet tables are created by:
+
+- `0013_seller_wallet.sql`
+- `0014_wallet_hardening.sql`
+- `0015_wallet_ops_indexes.sql`
+
+Apply against your Postgres (e.g. Neon) with:
+
+```bash
+DATABASE_URL="postgresql://..." npm run db:migrate
+```
+
+Until these run, `/dashboard/wallet` will report that `seller_wallets` does not exist.

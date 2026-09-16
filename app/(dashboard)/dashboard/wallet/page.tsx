@@ -96,7 +96,33 @@ export default function WalletPage() {
   }, [load]);
 
   if (!summary && !error) return <div className="p-8">Loading wallet…</div>;
-  if (!summary) return <div className="p-8 text-red-600">{error}</div>;
+  if (!summary) {
+    const needsMigration =
+      /wallet tables are not installed|migrations 0013|schema is incomplete/i.test(error);
+    return (
+      <div className="mx-auto max-w-lg space-y-3 px-4 py-12">
+        <h1 className="text-xl font-semibold text-ink-900">Wallet unavailable</h1>
+        <p className="text-sm text-red-700">{error}</p>
+        {needsMigration && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="font-medium">Database setup required</p>
+            <p className="mt-1">
+              The production database does not have the seller wallet tables yet. An operator should run:
+            </p>
+            <pre className="mt-2 overflow-x-auto rounded bg-white/80 p-2 text-xs">
+{`DATABASE_URL="your-production-url" npm run db:migrate`}
+            </pre>
+            <p className="mt-2 text-xs text-amber-800">
+              This applies migrations 0013–0015 (seller_wallets, ledger, withdrawals, indexes). It does not move money.
+            </p>
+          </div>
+        )}
+        <a href="/dashboard" className="inline-block text-sm text-ink-600 underline">
+          ← Back to overview
+        </a>
+      </div>
+    );
+  }
 
   const fmt = summary.formatted;
   const counts = summary.withdrawalCounts;
