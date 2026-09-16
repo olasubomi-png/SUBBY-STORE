@@ -94,25 +94,78 @@ export async function createStore(input: {
   email?: string;
   address?: string;
 }) {
-  if (useMemory()) return mem.memCreateStore(input);
+  // One store per seller account (dashboard uses a single primary store).
+  const existingOwned = await listStoresForOwner(input.ownerId);
+  if (existingOwned.length > 0) {
+    throw new Error("You already have a store on this account. Open the dashboard to manage it.");
+  }
+
+  if (useMemory()) {
+    const store = mem.memCreateStore(input);
+    try {
+      const { ensureStoreSubscription } = await import("@/lib/server/subscriptions");
+      await ensureStoreSubscription(store.id);
+    } catch { /* plans may be missing in pure unit tests */ }
+    return store;
+  }
+
   const db = getDb();
-  const slug = input.slug ? slugify(input.slug) : slugify(input.name);
-  if (!isValidSlug(slug)) throw new Error("Invalid store slug");
-  const rows = await db
-    .insert(stores)
-    .values({
-      ownerId: input.ownerId,
-      name: input.name.trim(),
-      slug,
-      description: input.description?.trim() || "",
-      phone: input.phone || null,
-      whatsapp: input.whatsapp || null,
-      email: input.email || null,
-      address: input.address || null,
-      currency: "NGN",
-    })
-    .returning();
-  return rows[0];
+  const explicitSlug = Boolean(input.slug?.trim());
+  const base = explicitSlug ? slugify(input.slug!) : slugify(input.name);
+  if (!isValidSlug(base)) throw new Error("Invalid store slug. Use letters, numbers, and hyphens only.");
+
+  let slug = base;
+  if (!explicitSlug) {
+    slug = await allocateUniqueStoreSlug(base);
+  } else {
+    const taken = await getStoreBySlug(slug);
+    if (taken) {
+      throw new Error("Store URL is already taken. Choose a different slug.");
+    }
+  }
+
+  try {
+    const rows = await db
+      .insert(stores)
+      .values({
+        ownerId: input.ownerId,
+        name: input.name.trim(),
+        slug,
+        description: input.description?.trim() || "",
+        phone: input.phone || null,
+        whatsapp: input.whatsapp || null,
+        email: input.email || null,
+        address: input.address || null,
+        currency: "NGN",
+      })
+      .returning();
+    const store = rows[0]!;
+    // Bootstrap Free plan so billing/entitlements work immediately
+    try {
+      const { ensureStoreSubscription } = await import("@/lib/server/subscriptions");
+      await ensureStoreSubscription(store.id);
+    } catch {
+      /* non-blocking if plans table not ready */
+    }
+    return store;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/unique|duplicate|stores_slug/i.test(msg)) {
+      throw new Error("Store URL is already taken. Choose a different name or slug.");
+    }
+    throw e;
+  }
+}
+
+/** Allocate store-a, store-a-2, ... when name-based slug collides. */
+async function allocateUniqueStoreSlug(base: string): Promise<string> {
+  for (let i = 0; i < 50; i++) {
+    const candidate = (i === 0 ? base : `${base}-${i + 1}`).slice(0, 80);
+    if (!isValidSlug(candidate)) continue;
+    const taken = await getStoreBySlug(candidate);
+    if (!taken) return candidate;
+  }
+  throw new Error("Could not allocate a unique store URL. Try a different name.");
 }
 
 export async function getStoreBySlug(slug: string) {

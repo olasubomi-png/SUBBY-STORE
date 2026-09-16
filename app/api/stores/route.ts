@@ -58,7 +58,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ store });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Failed";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    const status =
+      /already have a store|already taken|Invalid store slug/i.test(msg) ? 409 : 400;
+    return NextResponse.json({ error: msg }, { status });
   }
 }
 

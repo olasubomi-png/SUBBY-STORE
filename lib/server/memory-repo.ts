@@ -77,10 +77,26 @@ export function memCreateStore(input: {
   email?: string;
   address?: string;
 }) {
-  const slug = input.slug ? slugify(input.slug) : slugify(input.name);
-  if (!isValidSlug(slug)) throw new Error("Invalid store slug");
-  if (store.stores.some((s) => s.slug === slug)) {
-    throw new Error("Store slug already taken");
+  if (store.stores.some((s) => s.ownerId === input.ownerId)) {
+    throw new Error("You already have a store on this account. Open the dashboard to manage it.");
+  }
+  const explicitSlug = Boolean(input.slug?.trim());
+  const base = explicitSlug ? slugify(input.slug!) : slugify(input.name);
+  if (!isValidSlug(base)) throw new Error("Invalid store slug. Use letters, numbers, and hyphens only.");
+  let slug = base;
+  if (!explicitSlug) {
+    let found = false;
+    for (let i = 0; i < 50; i++) {
+      const candidate = (i === 0 ? base : `${base}-${i + 1}`).slice(0, 80);
+      if (!store.stores.some((s) => s.slug === candidate)) {
+        slug = candidate;
+        found = true;
+        break;
+      }
+    }
+    if (!found) throw new Error("Could not allocate a unique store URL. Try a different name.");
+  } else if (store.stores.some((s) => s.slug === slug)) {
+    throw new Error("Store URL is already taken. Choose a different slug.");
   }
   const row = {
     id: store.seq.store++,
