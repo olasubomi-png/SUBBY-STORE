@@ -1,3 +1,4 @@
+import { mapBillingError } from "@/lib/server/billing-errors";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveSellerStores } from "@/lib/server/store-resolve";
@@ -32,6 +33,6 @@ export async function POST(req: Request) {
       reference: result.reference, amountKobo: result.amountKobo, plan: result.plan.slug,
     });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Checkout failed" }, { status: 400 });
+    const mapped = mapBillingError(e); return NextResponse.json({ error: mapped.message }, { status: mapped.status });
   }
 }

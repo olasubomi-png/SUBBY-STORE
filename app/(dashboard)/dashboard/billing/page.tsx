@@ -107,7 +107,25 @@ export default function BillingPage() {
   }
 
   if (!data && !error) return <div className="p-8 text-ink-600">Loading billing…</div>;
-  if (error && !data) return <div className="p-8 text-red-600">{error}</div>;
+  if (error && !data) {
+    const needsMigration = /subscription tables are not installed|MIGRATE_REPAIR|does not exist/i.test(error);
+    return (
+      <div className="mx-auto max-w-lg space-y-3 px-4 py-12">
+        <h1 className="text-xl font-semibold text-ink-900">Billing unavailable</h1>
+        <p className="text-sm text-red-700">{error}</p>
+        {needsMigration && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="font-medium">Database setup required</p>
+            <p className="mt-1">Run on the server (with production DATABASE_URL):</p>
+            <pre className="mt-2 overflow-x-auto rounded bg-white/80 p-2 text-xs">
+{`MIGRATE_REPAIR=subscriptions npm run db:migrate`}
+            </pre>
+          </div>
+        )}
+        <a href="/dashboard" className="inline-block text-sm text-ink-600 underline">← Back to overview</a>
+      </div>
+    );
+  }
   if (!data) return null;
 
   const { plan, plans, subscription, history } = data;

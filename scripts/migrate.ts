@@ -5,20 +5,36 @@
  *   DATABASE_URL=postgresql://... npm run db:migrate
  *
  * Tracks applied files in schema_migrations.
- * Safe to re-run (skips already-applied files).
  *
- * Production note:
- * If the DB was created with drizzle-kit push / partial history and
- * schema_migrations is empty, this script auto-baselines older
- * migrations once core tables (e.g. stores) already exist, then applies
- * only the remaining files (wallet 0013–0015, etc.).
+ * Auto-baseline: if core app tables exist but history is empty, mark only
+ * migrations whose expected tables already exist. Missing feature tables
+ * (subscriptions, seller_wallets, …) are still applied from SQL.
  *
- * Force baseline without applying SQL for listed prefixes:
- *   MIGRATE_BASELINE_BEFORE=0013 npm run db:migrate
+ * Force re-apply specific missing features:
+ *   MIGRATE_REPAIR=subscriptions DATABASE_URL=... npm run db:migrate
  */
 import fs from "fs";
 import path from "path";
 import postgres from "postgres";
+
+/** Tables that must exist for a migration to be considered already applied. */
+const MIGRATION_TABLES: Record<string, string[]> = {
+  "0011_subscriptions.sql": [
+    "subscription_plans",
+    "subscriptions",
+    "billing_transactions",
+    "subscription_events",
+  ],
+  "0012_subscription_recurring.sql": ["subscriptions"],
+  "0013_seller_wallet.sql": [
+    "seller_wallets",
+    "wallet_ledger",
+    "seller_bank_accounts",
+    "withdrawals",
+  ],
+  "0014_wallet_hardening.sql": ["pending_wallet_credits"],
+  "0015_wallet_ops_indexes.sql": ["seller_wallets"],
+};
 
 function listSqlFiles(dir: string): string[] {
   return fs
@@ -27,7 +43,6 @@ function listSqlFiles(dir: string): string[] {
     .sort();
 }
 
-/** Lexicographic compare for migration filenames like 0012_... vs 0013_... */
 function isBefore(file: string, before: string): boolean {
   return file < before;
 }
@@ -45,10 +60,66 @@ async function tableExists(
   return Boolean(rows[0]?.exists);
 }
 
+async function allTablesExist(
+  sql: postgres.Sql,
+  tables: string[]
+): Promise<boolean> {
+  for (const t of tables) {
+    if (!(await tableExists(sql, t))) return false;
+  }
+  return true;
+}
+
+async function unmark(sql: postgres.Sql, filename: string) {
+  await sql`DELETE FROM schema_migrations WHERE filename = ${filename}`;
+}
+
+async function markApplied(sql: postgres.Sql, filename: string) {
+  await sql`
+    INSERT INTO schema_migrations (filename)
+    VALUES (${filename})
+    ON CONFLICT (filename) DO NOTHING
+  `;
+}
+
+async function applyFile(
+  sql: postgres.Sql,
+  migrationsDir: string,
+  file: string
+): Promise<"applied" | "skipped_exists"> {
+  const full = path.join(migrationsDir, file);
+  let body = fs.readFileSync(full, "utf8");
+  body = body.replace(/-->\s*statement-breakpoint/g, "\n").trim();
+  if (!body) return "applied";
+
+  console.log(`  apply ${file} ...`);
+  try {
+    await sql.begin(async (tx) => {
+      await tx.unsafe(body);
+      await tx`
+        INSERT INTO schema_migrations (filename) VALUES (${file})
+        ON CONFLICT (filename) DO NOTHING
+      `;
+    });
+    console.log(`  done  ${file}`);
+    return "applied";
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/already exists/i.test(msg) || /duplicate key/i.test(msg)) {
+      console.warn(
+        `  warn  ${file}: ${msg.split("\n")[0]} — recording as applied`
+      );
+      await markApplied(sql, file);
+      return "skipped_exists";
+    }
+    throw err;
+  }
+}
+
 async function main() {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
-    console.error("DATABASE_URL is required. Example:");
+    console.error("DATABASE_URL is required.");
     console.error('  DATABASE_URL="postgresql://..." npm run db:migrate');
     process.exit(1);
   }
@@ -59,7 +130,7 @@ async function main() {
     process.env.NODE_ENV === "production"
   ) {
     console.error(
-      "Refusing localhost DATABASE_URL when NODE_ENV=production (set ALLOW_LOCAL_MIGRATE=1 to override)."
+      "Refusing localhost DATABASE_URL when NODE_ENV=production."
     );
     process.exit(1);
   }
@@ -85,75 +156,89 @@ async function main() {
     let appliedRows = await sql<{ filename: string }[]>`
       SELECT filename FROM schema_migrations ORDER BY filename
     `;
-    const applied = new Set(appliedRows.map((r) => r.filename));
+    let applied = new Set(appliedRows.map((r) => r.filename));
 
     console.log(
       `Found ${files.length} migration file(s); ${applied.size} already recorded.`
     );
 
-    // --- Baseline for existing production DBs (drizzle push / no history) ---
-    const baselineBefore =
-      process.env.MIGRATE_BASELINE_BEFORE?.trim() || null;
+    // --- Repair mode: unmark feature migrations whose tables are missing ---
+    const repair = (process.env.MIGRATE_REPAIR || "").toLowerCase();
+    if (repair === "subscriptions" || repair === "all") {
+      for (const file of ["0011_subscriptions.sql", "0012_subscription_recurring.sql"]) {
+        const required = MIGRATION_TABLES[file];
+        if (required && !(await allTablesExist(sql, required))) {
+          console.log(`Repair: unmarking ${file} (required tables missing)`);
+          await unmark(sql, file);
+          applied.delete(file);
+        }
+      }
+    }
+    if (repair === "wallet" || repair === "all") {
+      for (const file of [
+        "0013_seller_wallet.sql",
+        "0014_wallet_hardening.sql",
+        "0015_wallet_ops_indexes.sql",
+      ]) {
+        const required = MIGRATION_TABLES[file];
+        if (required && !(await allTablesExist(sql, required))) {
+          console.log(`Repair: unmarking ${file} (required tables missing)`);
+          await unmark(sql, file);
+          applied.delete(file);
+        }
+      }
+    }
+
+    // Auto-repair: if history says 0011 applied but subscriptions missing, unmark
+    for (const [file, tables] of Object.entries(MIGRATION_TABLES)) {
+      if (!applied.has(file)) continue;
+      if (!(await allTablesExist(sql, tables))) {
+        console.log(
+          `Auto-repair: ${file} was marked applied but tables missing — will re-apply`
+        );
+        await unmark(sql, file);
+        applied.delete(file);
+      }
+    }
+
+    // --- Baseline for empty history + existing core schema ---
+    const baselineBefore = process.env.MIGRATE_BASELINE_BEFORE?.trim() || null;
     const storesExist = await tableExists(sql, "stores");
-    const walletsExist = await tableExists(sql, "seller_wallets");
 
     if (baselineBefore) {
       const toMark = files.filter(
         (f) => isBefore(f, baselineBefore) && !applied.has(f)
       );
-      if (toMark.length) {
-        console.log(
-          `Baselining ${toMark.length} file(s) before ${baselineBefore} (no SQL run)...`
-        );
-        for (const file of toMark) {
-          await sql`
-            INSERT INTO schema_migrations (filename)
-            VALUES (${file})
-            ON CONFLICT (filename) DO NOTHING
-          `;
-          applied.add(file);
-          console.log(`  baseline ${file}`);
-        }
-      }
-    } else if (storesExist && applied.size === 0) {
-      // Auto-baseline everything strictly before the first wallet migration
-      // when the app schema is already present but history was never tracked.
-      const firstWallet = files.find((f) => f.startsWith("0013_"));
-      const cutoff = firstWallet || "0013_";
-      const toMark = files.filter((f) => isBefore(f, cutoff));
-      console.log(
-        `Detected existing app schema (stores) with empty migration history.`
-      );
-      console.log(
-        `Baselining ${toMark.length} pre-wallet migration(s) as already applied...`
-      );
       for (const file of toMark) {
-        await sql`
-          INSERT INTO schema_migrations (filename)
-          VALUES (${file})
-          ON CONFLICT (filename) DO NOTHING
-        `;
+        // Still verify guarded migrations
+        const required = MIGRATION_TABLES[file];
+        if (required && !(await allTablesExist(sql, required))) {
+          console.log(`  skip baseline ${file} (tables not present)`);
+          continue;
+        }
+        await markApplied(sql, file);
         applied.add(file);
         console.log(`  baseline ${file}`);
       }
-      if (walletsExist) {
-        // Also mark wallet migrations if tables already present
-        for (const file of files.filter(
-          (f) => f.startsWith("0013_") || f.startsWith("0014_") || f.startsWith("0015_")
-        )) {
-          if (applied.has(file)) continue;
-          await sql`
-            INSERT INTO schema_migrations (filename)
-            VALUES (${file})
-            ON CONFLICT (filename) DO NOTHING
-          `;
-          applied.add(file);
-          console.log(`  baseline ${file} (seller_wallets already exists)`);
+    } else if (storesExist && applied.size === 0) {
+      const firstWallet = files.find((f) => f.startsWith("0013_")) || "0013_";
+      console.log(
+        `Detected existing app schema (stores) with empty migration history.`
+      );
+      for (const file of files.filter((f) => isBefore(f, firstWallet))) {
+        const required = MIGRATION_TABLES[file];
+        if (required && !(await allTablesExist(sql, required))) {
+          console.log(
+            `  leave open ${file} (required tables missing — will apply SQL)`
+          );
+          continue;
         }
+        await markApplied(sql, file);
+        applied.add(file);
+        console.log(`  baseline ${file}`);
       }
     }
 
-    // Refresh applied set
     appliedRows = await sql<{ filename: string }[]>`
       SELECT filename FROM schema_migrations ORDER BY filename
     `;
@@ -165,54 +250,19 @@ async function main() {
         console.log(`  skip  ${file}`);
         continue;
       }
-      const full = path.join(migrationsDir, file);
-      let body = fs.readFileSync(full, "utf8");
-      // Drizzle kit inserts this marker between statements — strip it
-      body = body.replace(/-->\s*statement-breakpoint/g, "\n").trim();
-      if (!body) {
-        console.log(`  skip  ${file} (empty)`);
-        continue;
-      }
-      console.log(`  apply ${file} ...`);
-      try {
-        await sql.begin(async (tx) => {
-          await tx.unsafe(body);
-          await tx`
-            INSERT INTO schema_migrations (filename) VALUES (${file})
-          `;
-        });
-        console.log(`  done  ${file}`);
-        appliedCount += 1;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // If object already exists, record as applied so we can continue
-        // (common when schema was partially created outside this runner).
-        if (
-          /already exists/i.test(msg) ||
-          /duplicate key/i.test(msg)
-        ) {
-          console.warn(
-            `  warn  ${file}: ${msg.split("\n")[0]} — recording as applied and continuing`
-          );
-          await sql`
-            INSERT INTO schema_migrations (filename)
-            VALUES (${file})
-            ON CONFLICT (filename) DO NOTHING
-          `;
-          appliedNow.add(file);
-          continue;
-        }
-        throw err;
-      }
+      const result = await applyFile(sql, migrationsDir, file);
+      if (result === "applied") appliedCount += 1;
+      appliedNow.add(file);
     }
 
+    const subscriptionsOk = await tableExists(sql, "subscriptions");
     const walletsOk = await tableExists(sql, "seller_wallets");
     console.log(
-      `Migrations complete. Applied ${appliedCount} new file(s). seller_wallets exists: ${walletsOk}`
+      `Migrations complete. Applied ${appliedCount} new file(s). subscriptions: ${subscriptionsOk}, seller_wallets: ${walletsOk}`
     );
-    if (!walletsOk) {
+    if (!subscriptionsOk || !walletsOk) {
       console.error(
-        "WARNING: seller_wallets still missing. Check 0013_seller_wallet.sql."
+        "WARNING: required tables still missing. Try: MIGRATE_REPAIR=all DATABASE_URL=... npm run db:migrate"
       );
       process.exit(2);
     }

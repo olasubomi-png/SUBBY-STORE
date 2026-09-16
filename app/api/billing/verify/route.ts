@@ -1,3 +1,4 @@
+import { mapBillingError } from "@/lib/server/billing-errors";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveSellerStores } from "@/lib/server/store-resolve";
@@ -22,6 +23,6 @@ export async function POST(req: Request) {
       alreadyProcessed: result.alreadyProcessed, plan: result.plan.slug, status: result.subscription.status,
     });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Verify failed" }, { status: 400 });
+    const mapped = mapBillingError(e); return NextResponse.json({ error: mapped.message }, { status: mapped.status });
   }
 }

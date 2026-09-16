@@ -1,3 +1,4 @@
+import { mapBillingError } from "@/lib/server/billing-errors";
 import { NextResponse } from "next/server";
 import { resolveSellerStores } from "@/lib/server/store-resolve";
 import { getBillingSummary } from "@/lib/server/subscriptions";
@@ -11,6 +12,6 @@ export async function GET() {
     const summary = await getBillingSummary(resolved.primary.id);
     return NextResponse.json({ storeId: resolved.primary.id, storeSlug: resolved.primary.slug, ...summary });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Failed" }, { status: 400 });
+    const mapped = mapBillingError(e); return NextResponse.json({ error: mapped.message }, { status: mapped.status });
   }
 }
