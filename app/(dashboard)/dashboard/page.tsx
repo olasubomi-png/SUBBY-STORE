@@ -296,14 +296,11 @@ export default function DashboardPage() {
     <div className="space-y-6 pb-8">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-brand-700">
-            Seller dashboard
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-ink-950 sm:text-3xl">
-            {greeting} 👋
+          <h1 className="text-2xl font-semibold tracking-tight text-ink-950 sm:text-3xl">
+            {greeting}
           </h1>
           <p className="mt-1 text-sm text-ink-500">
-            Here&apos;s how your store is performing.
+            Store performance at a glance
           </p>
         </div>
 
@@ -338,10 +335,7 @@ export default function DashboardPage() {
       <section className="rounded-xl border border-ink-100 bg-white p-5 shadow-sm">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h2 className="font-semibold text-ink-950">Everything in one place</h2>
-            <p className="mt-1 text-xs text-ink-500">
-              Jump to any part of your store — no need to hunt through menus
-            </p>
+            <h2 className="font-semibold text-ink-950">Quick access</h2>
           </div>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
@@ -373,10 +367,7 @@ export default function DashboardPage() {
         <div className="rounded-xl border border-ink-100 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="font-semibold text-ink-950">Sales overview</h2>
-              <p className="mt-1 text-xs text-ink-500">
-                Paid sales over the last 7 days
-              </p>
+              <h2 className="font-semibold text-ink-950">Sales (7 days)</h2>
             </div>
 
             <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
@@ -571,9 +562,6 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="font-semibold text-ink-950">Quick actions</h2>
-            <p className="mt-1 text-xs text-ink-500">
-              Common seller tasks
-            </p>
           </div>
         </div>
 
@@ -582,23 +570,16 @@ export default function DashboardPage() {
             href="/dashboard/products"
             className="rounded-lg border border-ink-200 p-4 transition hover:border-brand-300 hover:bg-brand-50"
           >
-            <p className="text-sm font-semibold text-ink-900">
-              Add product
-            </p>
-            <p className="mt-1 text-xs text-ink-500">
-              Create a new product listing
-            </p>
+            <p className="text-sm font-semibold text-ink-900">Add product</p>
           </Link>
 
           <Link
             href="/dashboard/orders"
             className="rounded-lg border border-ink-200 p-4 transition hover:border-brand-300 hover:bg-brand-50"
           >
-            <p className="text-sm font-semibold text-ink-900">
-              Manage orders
-            </p>
+            <p className="text-sm font-semibold text-ink-900">Orders</p>
             <p className="mt-1 text-xs text-ink-500">
-              {stats.unfulfilledOrderCount} awaiting fulfilment
+              {stats.unfulfilledOrderCount} to fulfil
             </p>
           </Link>
 
@@ -606,12 +587,7 @@ export default function DashboardPage() {
             href="/dashboard/settings"
             className="rounded-lg border border-ink-200 p-4 transition hover:border-brand-300 hover:bg-brand-50"
           >
-            <p className="text-sm font-semibold text-ink-900">
-              Store settings
-            </p>
-            <p className="mt-1 text-xs text-ink-500">
-              Branding and store information
-            </p>
+            <p className="text-sm font-semibold text-ink-900">Settings</p>
           </Link>
         </div>
       </section>

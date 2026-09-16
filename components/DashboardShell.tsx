@@ -189,8 +189,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               >
                 SUBBY STORE
               </Link>
-              <span className="hidden text-sm font-medium text-ink-500 lg:inline">
-                Seller dashboard
+              <span className="hidden text-sm text-ink-400 lg:inline">
+                Dashboard
               </span>
             </div>
             <div className="flex items-center gap-1">

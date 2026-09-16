@@ -2,9 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SUBBY STORE — Your business. Your online store.",
+  title: {
+    default: "SUBBY STORE",
+    template: "%s · SUBBY STORE",
+  },
   description:
-    "Create your online store, sell your products and accept payments — without needing a website developer.",
+    "Launch an online store, accept Paystack payments in NGN, and manage orders from one dashboard.",
 };
 
 export default function RootLayout({
@@ -14,7 +17,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen font-sans">{children}</body>
+      <body className="min-h-screen bg-ink-50 font-sans text-ink-950 antialiased">
+        {children}
+      </body>
     </html>
   );
 }

@@ -24,7 +24,7 @@ function SocialLink({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-xs font-medium text-ink-600 underline-offset-2 hover:underline"
+      className="text-xs font-medium text-ink-500 transition hover:text-ink-900"
     >
       {label}
     </a>

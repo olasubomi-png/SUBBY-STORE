@@ -35,66 +35,76 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     }
   }
 
+  const inputClass =
+    "mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-sm text-ink-950 outline-none transition placeholder:text-ink-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20";
+
   return (
     <form onSubmit={onSubmit} className="mx-auto w-full max-w-sm space-y-4">
       {mode === "signup" && (
         <label className="block text-sm">
-          <span className="text-ink-700">Full name</span>
+          <span className="font-medium text-ink-700">Full name</span>
           <input
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
+            className={inputClass}
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             required
             minLength={2}
+            autoComplete="name"
           />
         </label>
       )}
       <label className="block text-sm">
-        <span className="text-ink-700">Email</span>
+        <span className="font-medium text-ink-700">Email</span>
         <input
           type="email"
-          className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
+          className={inputClass}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
+          autoComplete="email"
         />
       </label>
       <label className="block text-sm">
-        <span className="text-ink-700">Password</span>
+        <span className="font-medium text-ink-700">Password</span>
         <input
           type="password"
-          className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2"
+          className={inputClass}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
           minLength={mode === "signup" ? 8 : 1}
+          autoComplete={mode === "signup" ? "new-password" : "current-password"}
         />
       </label>
-      {error && (
-        <p className="text-sm text-red-600" role="alert">
+      {error ? (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
           {error}
         </p>
-      )}
+      ) : null}
       <button
         type="submit"
         disabled={loading}
-        className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+        className="w-full rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
       >
-        {loading ? "Please wait…" : mode === "signup" ? "Create account" : "Log in"}
+        {loading
+          ? "Please wait…"
+          : mode === "signup"
+            ? "Create account"
+            : "Log in"}
       </button>
       <p className="text-center text-sm text-ink-500">
         {mode === "signup" ? (
           <>
             Already have an account?{" "}
-            <Link href="/login" className="text-brand-700">
+            <Link href="/login" className="font-medium text-brand-700 hover:underline">
               Log in
             </Link>
           </>
         ) : (
           <>
             New here?{" "}
-            <Link href="/signup" className="text-brand-700">
-              Create account
+            <Link href="/signup" className="font-medium text-brand-700 hover:underline">
+              Create an account
             </Link>
           </>
         )}
