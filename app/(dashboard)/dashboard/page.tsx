@@ -335,6 +335,40 @@ export default function DashboardPage() {
         ))}
       </section>
 
+      <section className="rounded-xl border border-ink-100 bg-white p-5 shadow-sm">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-ink-950">Everything in one place</h2>
+            <p className="mt-1 text-xs text-ink-500">
+              Jump to any part of your store — no need to hunt through menus
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+          {[
+            { href: "/dashboard/orders", label: "Orders", hint: "Fulfil & track" },
+            { href: "/dashboard/customers", label: "Customers", hint: "Buyer list" },
+            { href: "/dashboard/analytics", label: "Analytics", hint: "Sales insights" },
+            { href: "/dashboard/inventory", label: "Inventory", hint: "Stock levels" },
+            { href: "/dashboard/products", label: "Products", hint: "Catalogue" },
+            { href: "/dashboard/coupons", label: "Coupons", hint: "Discounts" },
+            { href: "/dashboard/marketing", label: "Marketing", hint: "Campaigns" },
+            { href: "/dashboard/billing", label: "Billing", hint: "Your plan" },
+            { href: "/dashboard/wallet", label: "Wallet", hint: "Earnings" },
+            { href: "/dashboard/settings", label: "Settings", hint: "Store profile" },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-3 transition hover:border-brand-300 hover:bg-brand-50"
+            >
+              <p className="text-sm font-semibold text-ink-900">{item.label}</p>
+              <p className="mt-0.5 text-[11px] text-ink-500">{item.hint}</p>
+            </Link>
+          ))}
+        </div>
+      </section>
+
       <section className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
         <div className="rounded-xl border border-ink-100 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4">
