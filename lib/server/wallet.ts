@@ -1,9 +1,9 @@
 /**
  * Seller wallet ledger & withdrawals (Phase 9.3). Integer kobo only.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { sellerWallets, walletLedger, sellerBankAccounts, withdrawals, stores } from "@/db/schema";
+import { sellerWallets, walletLedger, sellerBankAccounts, withdrawals, stores, orders, pendingWalletCredits } from "@/db/schema";
 import { useMemory } from "@/lib/server/repo";
 import * as mem from "@/lib/server/memory-repo";
 import { assertPositiveKobo } from "@/lib/money";
@@ -339,7 +339,7 @@ export async function requestWithdrawal(input: { ownerId: number; storeId: numbe
 
 export async function completeWithdrawal(input: { reference: string; transferCode?: string | null; providerEventId?: string | null }) {
   if (useMemory()) {
-    if (input.providerEventId && ledgerExists("x", input.providerEventId)) {
+    if (input.providerEventId && ledgerExists("", input.providerEventId)) {
       const wd = mem.getMemoryStore().withdrawals.find((w) => w.reference === input.reference);
       return { alreadyProcessed: true, withdrawal: wd ?? null };
     }
@@ -350,7 +350,8 @@ export async function completeWithdrawal(input: { reference: string; transferCod
     assertWithdrawalTransition(ms.withdrawals[widx]!.status, "success");
     const amount = ms.withdrawals[widx]!.amountKobo;
     ms.withdrawals[widx] = { ...ms.withdrawals[widx]!, status: "success", transferCode: input.transferCode || ms.withdrawals[widx]!.transferCode, completedAt: new Date(), providerEventId: input.providerEventId ?? null, updatedAt: new Date() };
-    const sidx = ms.sellerWallets.findIndex((w) => w.storeId === ms.withdrawals[widx]!.storeId);
+    const sidx = ms.sellerWallets.findIndex((w) => w.id === ms.withdrawals[widx]!.walletId);
+    if (sidx < 0) throw new Error("wallet_not_found");
     ms.sellerWallets[sidx] = { ...ms.sellerWallets[sidx]!, lifetimeWithdrawnKobo: ms.sellerWallets[sidx]!.lifetimeWithdrawnKobo + amount, updatedAt: new Date() };
     pushLedger({ storeId: ms.withdrawals[widx]!.storeId, walletId: ms.withdrawals[widx]!.walletId, entryType: "withdrawal_completed", direction: "debit", amountKobo: amount, balanceAfterAvailableKobo: ms.sellerWallets[sidx]!.availableKobo, balanceAfterPendingKobo: ms.sellerWallets[sidx]!.pendingKobo, withdrawalId: ms.withdrawals[widx]!.id, reference: input.reference, idempotencyKey: `withdrawal_completed:${input.reference}`, providerEventId: input.providerEventId });
     void softNotifyWithdrawal("succeeded", ms.withdrawals[widx]!.storeId, input.reference, amount);
@@ -390,6 +391,7 @@ export async function failWithdrawal(input: { reference: string; reason?: string
     if (wd.status === "failed") return { alreadyProcessed: true, withdrawal: wd };
     assertWithdrawalTransition(wd.status, "failed");
     await releaseHoldMem(wd.storeId, wd.id, input.reference, wd.amountKobo, input.reason || "Transfer failed");
+    void softNotifyWithdrawal("failed", wd.storeId, input.reference, wd.amountKobo);
     return { alreadyProcessed: false, withdrawal: ms.withdrawals.find((w) => w.id === wd.id)! };
   }
   const rows = await getDb().select().from(withdrawals).where(eq(withdrawals.reference, input.reference)).limit(1);
@@ -429,6 +431,7 @@ export async function reverseWithdrawal(input: { reference: string; providerEven
     const sidx = ms.sellerWallets.findIndex((w) => w.storeId === ms.withdrawals[widx]!.storeId);
     ms.sellerWallets[sidx] = { ...ms.sellerWallets[sidx]!, availableKobo: ms.sellerWallets[sidx]!.availableKobo + amount, lifetimeWithdrawnKobo: Math.max(0, ms.sellerWallets[sidx]!.lifetimeWithdrawnKobo - amount), updatedAt: new Date() };
     pushLedger({ storeId: ms.withdrawals[widx]!.storeId, walletId: ms.withdrawals[widx]!.walletId, entryType: "withdrawal_release", direction: "credit", amountKobo: amount, balanceAfterAvailableKobo: ms.sellerWallets[sidx]!.availableKobo, balanceAfterPendingKobo: ms.sellerWallets[sidx]!.pendingKobo, withdrawalId: ms.withdrawals[widx]!.id, reference: `${input.reference}_reversed`, idempotencyKey: key, providerEventId: input.providerEventId });
+    void softNotifyWithdrawal("reversed", ms.withdrawals[widx]!.storeId, input.reference, amount);
     return { alreadyProcessed: false, withdrawal: ms.withdrawals[widx]! };
   }
   const db = getDb();
@@ -581,18 +584,47 @@ export async function reconcileWithdrawal(reference: string) {
   return { status: wd.status, alreadyResolved: false, withdrawal: wd };
 }
 
-export async function findPaidOrdersMissingEarnings(limit = 50) {
+export async function findPaidOrdersMissingEarnings(limit = 50): Promise<
+  Array<{ orderId: number; storeId: number; totalKobo: number; paymentReference: string | null }>
+> {
   if (useMemory()) {
     const ms = mem.getMemoryStore();
     const out: Array<{ orderId: number; storeId: number; totalKobo: number; paymentReference: string | null }> = [];
     for (const o of ms.orders.filter((x) => x.paymentStatus === "paid")) {
       const has = ms.walletLedger.some((e) => e.orderId === o.id && e.entryType === "order_earning");
-      if (!has) out.push({ orderId: o.id, storeId: o.storeId, totalKobo: o.totalKobo, paymentReference: null });
+      if (!has) {
+        out.push({
+          orderId: o.id,
+          storeId: o.storeId,
+          totalKobo: o.totalKobo,
+          paymentReference: (o as { paymentReference?: string | null }).paymentReference ?? null,
+        });
+      }
       if (out.length >= limit) break;
     }
     return out;
   }
-  return [];
+
+  // Production path: paid orders with no order_earning ledger row
+  const result = await getDb().execute(sql`
+    SELECT o.id AS "orderId", o.store_id AS "storeId", o.total_kobo AS "totalKobo",
+           o.payment_reference AS "paymentReference"
+    FROM orders o
+    WHERE o.payment_status = 'paid'
+      AND NOT EXISTS (
+        SELECT 1 FROM wallet_ledger wl
+        WHERE wl.order_id = o.id AND wl.entry_type = 'order_earning'
+      )
+    ORDER BY o.id ASC
+    LIMIT ${limit}
+  `);
+  const rows = ((result as { rows?: unknown[] }).rows ?? result) as Array<{
+    orderId: number;
+    storeId: number;
+    totalKobo: number;
+    paymentReference: string | null;
+  }>;
+  return Array.isArray(rows) ? rows : [];
 }
 
 export async function findStuckWithdrawals(olderThanMinutes = 30, limit = 50) {
@@ -600,8 +632,25 @@ export async function findStuckWithdrawals(olderThanMinutes = 30, limit = 50) {
     const ms = mem.getMemoryStore();
     const cutoff = Date.now() - olderThanMinutes * 60_000;
     return ms.withdrawals
-      .filter((w) => (w.status === "processing" || w.status === "provider_unknown") && w.createdAt.getTime() < cutoff)
+      .filter(
+        (w) =>
+          (w.status === "processing" || w.status === "provider_unknown") &&
+          w.createdAt.getTime() < cutoff
+      )
       .slice(0, limit);
   }
-  return [];
+
+  // Production path: processing / provider_unknown older than threshold
+  const cutoff = new Date(Date.now() - Math.max(0, olderThanMinutes) * 60_000);
+  return getDb()
+    .select()
+    .from(withdrawals)
+    .where(
+      and(
+        or(eq(withdrawals.status, "processing"), eq(withdrawals.status, "provider_unknown")),
+        lt(withdrawals.createdAt, cutoff)
+      )
+    )
+    .orderBy(withdrawals.createdAt)
+    .limit(limit);
 }

@@ -93,3 +93,32 @@ describe("rate limit", () => {
     expect(checkRateLimit("t:1", 5, 60_000).allowed).toBe(false);
   });
 });
+
+
+describe("reconciliation finders", () => {
+  beforeEach(() => resetMemoryStore());
+
+  it("findStuckWithdrawals returns processing/provider_unknown by age", async () => {
+    const { findStuckWithdrawals } = await import("@/lib/server/wallet");
+    const user = await memSignup({
+      email: `stk${Math.random().toString(16).slice(2)}@t.local`,
+      password: "password123",
+      fullName: "S",
+    });
+    const shop = memCreateStore({ ownerId: user.id, name: `Stk${user.id}` });
+    await creditOrderEarning({ storeId: shop.id, orderId: 99, amountKobo: 500_000 });
+    await verifyAndSaveBankAccount({
+      ownerId: user.id, storeId: shop.id, bankCode: "058", bankName: "GTBank", accountNumber: "0123456789",
+    });
+    const { withdrawal } = await requestWithdrawal({
+      ownerId: user.id, storeId: shop.id, amountKobo: 100_000, idempotencyKey: "timeout_stuck1",
+    });
+    expect(withdrawal.status).toBe("provider_unknown");
+    // age 0 minutes → include all
+    const stuck = await findStuckWithdrawals(0, 50);
+    expect(stuck.some((w: { reference: string }) => w.reference === withdrawal.reference)).toBe(true);
+    // far future threshold → empty
+    const none = await findStuckWithdrawals(60 * 24 * 365, 50);
+    expect(none).toHaveLength(0);
+  });
+});
