@@ -394,8 +394,12 @@ export default function SettingsPage() {
             "WhatsApp",
             store.whatsapp || "",
             (v) => patch({ whatsapp: v }),
-            { maxLength: 32, placeholder: "2348012345678" }
+            { maxLength: 32, placeholder: "08031234567 or 2348031234567" }
           )}
+          <p className="text-xs text-ink-500">
+            Used on your storefront and for seller alerts (new orders, payments, low stock)
+            when WhatsApp messaging is enabled for the platform.
+          </p>
           {field("Email", store.email || "", (v) => patch({ email: v }), {
             type: "email",
             maxLength: 255,

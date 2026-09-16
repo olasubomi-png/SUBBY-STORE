@@ -70,38 +70,60 @@ export async function createNotification(input: {
   relatedCouponId?: number | null;
   href?: string | null;
   dedupeKey: string;
+  /** Skip WhatsApp (e.g. bulk/system). Default: send when configured. */
+  skipWhatsApp?: boolean;
 }): Promise<NotificationRow | null> {
+  let created: NotificationRow | null = null;
   try {
     if (useMemory()) {
-      return mem.memCreateNotification(input);
-    }
-    const db = getDb();
-    try {
-      const rows = await db
-        .insert(notifications)
-        .values({
-          storeId: input.storeId,
-          type: input.type,
-          title: input.title.slice(0, 160),
-          message: input.message,
-          relatedOrderId: input.relatedOrderId ?? null,
-          relatedProductId: input.relatedProductId ?? null,
-          relatedCouponId: input.relatedCouponId ?? null,
-          href: input.href ?? null,
-          read: false,
-          dedupeKey: input.dedupeKey.slice(0, 160),
-        })
-        .returning();
-      return rows[0] ?? null;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/unique|duplicate/i.test(msg)) return null;
-      throw err;
+      created = mem.memCreateNotification(input);
+    } else {
+      const db = getDb();
+      try {
+        const rows = await db
+          .insert(notifications)
+          .values({
+            storeId: input.storeId,
+            type: input.type,
+            title: input.title.slice(0, 160),
+            message: input.message,
+            relatedOrderId: input.relatedOrderId ?? null,
+            relatedProductId: input.relatedProductId ?? null,
+            relatedCouponId: input.relatedCouponId ?? null,
+            href: input.href ?? null,
+            read: false,
+            dedupeKey: input.dedupeKey.slice(0, 160),
+          })
+          .returning();
+        created = rows[0] ?? null;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/unique|duplicate/i.test(msg)) return null;
+        throw err;
+      }
     }
   } catch (err) {
     console.error("[notifications] create failed", err);
     return null;
   }
+
+  // Push to seller WhatsApp (non-blocking). Only when a new row was created.
+  if (created && !input.skipWhatsApp) {
+    void (async () => {
+      try {
+        const { notifyStoreWhatsApp } = await import("@/lib/server/whatsapp");
+        await notifyStoreWhatsApp({
+          storeId: input.storeId,
+          title: input.title,
+          message: input.message,
+        });
+      } catch {
+        /* never break notification flow */
+      }
+    })();
+  }
+
+  return created;
 }
 
 export async function notifyOrderCreated(order: {
